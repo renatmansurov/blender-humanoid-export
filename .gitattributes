@@ -1,0 +1,7 @@
+# Normalize line endings in the repository to LF; checkouts follow the platform.
+* text=auto eol=lf
+
+*.blend binary
+*.fbx binary
+*.zip binary
+*.png binary

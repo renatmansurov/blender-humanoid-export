@@ -1,0 +1,23 @@
+schema_version = "1.0.0"
+
+id = "cascadeur_export"
+version = "0.3.0"
+name = "Cascadeur Export"
+tagline = "UE4-style skeleton and animation FBX from Auto-Rig Pro or Rigify"
+maintainer = "Renat Mansurov"
+type = "add-on"
+
+website = "https://github.com/renatmansurov/blender-to-cascadeur"
+
+tags = ["Animation", "Import-Export", "Rigging"]
+
+blender_version_min = "4.2.0"
+
+license = ["SPDX:GPL-3.0-or-later"]
+copyright = ["2026 Renat Mansurov"]
+
+[permissions]
+files = "Write the exported FBX to disk"
+
+[build]
+paths_exclude_pattern = ["__pycache__/", "*.pyc", ".*"]

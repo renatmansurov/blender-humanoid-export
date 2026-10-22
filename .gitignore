@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+
+# Build output (release zips are built by GitHub Actions and attached to GitHub Releases)
+/dist/
+/build/
+*.zip
+
+# Blender
+*.blend1
+*.blend2
+*.blend@
+
+# Local test data and results: characters are not redistributable, results are regenerated
+/tests/in/
+/tests/out/
+*.blend
+*.fbx
+
+# Local Unity project used only for manual import testing
+/character-test-unity/
+
+# AI assistant / tool files (local only)
+CLAUDE.md
+CLAUDE.local.md
+.claude/
+.codegraph/
+.mcp.json
+
+# IDE and OS
+.vscode/
+.idea/
+*.code-workspace
+.DS_Store
+Thumbs.db
+desktop.ini
