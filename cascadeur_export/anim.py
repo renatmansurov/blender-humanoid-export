@@ -3,8 +3,9 @@
 
 """Bakes a rig's animation onto the skeleton built by ``build.build()``.
 
-Every target bone gets the world-space deformation of its first source bone, frame by frame,
-with scale dropped: only location and rotation are keyed.
+Every target bone gets the world-space rotation of its first source bone, frame by frame. Only the
+root bone (pelvis) is also keyed in location; the other bones keep their rest offsets, so stretch
+and scale are dropped, as a Humanoid avatar would drop them anyway.
 """
 
 import math
@@ -16,6 +17,9 @@ import bpy
 from mathutils import Matrix
 
 from . import build as build_mod
+
+# Stretch (offset of a non-root bone from its rest position) below this, in metres, is not reported.
+STRETCH_TOLERANCE = 0.005
 
 
 def is_animated(ob):
@@ -127,6 +131,19 @@ def _fcurve(action, arm, path, index, group):
     return action.fcurves.new(path, index=index, action_group=group)
 
 
+def rest_action(arm):
+    """A temporary action that holds every bone of ``arm`` at rest, assigned to it."""
+    action = bpy.data.actions.new("csc_rest")
+    action[build_mod.TMP_PROP] = True
+    arm.animation_data_create().action = action
+    for pb in arm.pose.bones:
+        pb.rotation_mode = 'QUATERNION'
+        for prop, values in (("location", (0.0, 0.0, 0.0)), ("rotation_quaternion", (1.0, 0.0, 0.0, 0.0))):
+            for i, v in enumerate(values):
+                _fcurve(action, arm, f'pose.bones["{pb.name}"].{prop}', i, pb.name).keyframe_points.insert(0, v)
+    return action
+
+
 def scene_fps(scene):
     return scene.render.fps / scene.render.fps_base
 
@@ -142,8 +159,9 @@ def resampled_frames(scene, frame_start, frame_end, fps):
 
 def bake(context, build, frame_start, frame_end, name, fps=None):
     """Samples the source rig (at subframes when resampling to ``fps``, see resampled_frames())
-    and returns an action for ``build.armature`` (left assigned to it) keying location and
-    rotation_quaternion of every bone."""
+    and returns an action for ``build.armature`` (left assigned to it) keying rotation_quaternion
+    of every bone and location of the root bones. Stretch that is dropped this way is reported in
+    ``build.warnings``."""
     scene = context.scene
     rig, arm, plan = build.source, build.armature, build.plan
     scale, scale_inv = build.scale, build.scale.inverted()
@@ -152,8 +170,10 @@ def bake(context, build, frame_start, frame_end, name, fps=None):
                 for t, (sources, _) in plan.items()}
     samples = resampled_frames(scene, frame_start, frame_end, fps)
     frames = [key for key, _ in samples]
-    locs = {t: [] for t in plan}
+    locs = {t: [] for t in plan if plan[t][1] is None}
     rots = {t: [] for t in plan}
+    # Largest offset of a non-root bone from its rest position: (distance, bone, scene time).
+    stretch = (0.0, None, None)
     for _, time in samples:
         whole = math.floor(time)
         scene.frame_set(whole, subframe=time - whole)
@@ -171,16 +191,30 @@ def bake(context, build, frame_start, frame_end, name, fps=None):
             loc, rot, _ = basis.decompose()
             if rots[t]:
                 rot.make_compatible(rots[t][-1])
-            locs[t].append(loc)
             rots[t].append(rot)
+            if t in locs:
+                locs[t].append(loc)
+            elif loc.length > stretch[0]:
+                stretch = loc.length, t, time
+
+    unit = scale[0][0]
+    if stretch[0] > STRETCH_TOLERANCE * unit:
+        build.warnings.append(
+            f"'{name}': bone stretch is not exported (up to {stretch[0] / unit * 100:.1f} cm "
+            f"on '{stretch[1]}' at frame {stretch[2]:g})")
 
     action = bpy.data.actions.new(name)
     action[build_mod.TMP_PROP] = True
     ad = arm.animation_data_create()
     ad.action = action
     for t in plan:
-        arm.pose.bones[t].rotation_mode = 'QUATERNION'
-        for prop, values, size in (("location", locs[t], 3), ("rotation_quaternion", rots[t], 4)):
+        pb = arm.pose.bones[t]
+        pb.rotation_mode = 'QUATERNION'
+        pb.location = (0.0, 0.0, 0.0)
+        channels = [("rotation_quaternion", rots[t], 4)]
+        if t in locs:
+            channels.append(("location", locs[t], 3))
+        for prop, values, size in channels:
             for i in range(size):
                 fc = _fcurve(action, arm, f'pose.bones["{t}"].{prop}', i, t)
                 fc.keyframe_points.add(len(frames))

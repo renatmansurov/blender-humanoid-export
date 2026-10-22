@@ -66,10 +66,13 @@ Variants: `human`, `basic`, `human_noface`, `human_torso2`, `human_torso5`, `hum
 What is checked: bone set and hierarchy against the template; rest positions, weight sums,
 normals and shape keys; deformation match in animation and in a random pose; scene restoration;
 units and character height in the FBX. For animation: the baked pose matches the rig's
-deformation (within 0.1 mm), no quaternion flips, mesh deformation on real animation < 1 cm, the
-clip FBX has one take named after the action with the right length, no geometry, the hierarchy
-matches the model FBX, and the action, slot, NLA and frame are restored after export. If the file
-has no animation, a synthetic one is put on the rig temporarily.
+rotation and root location (within 0.1 mm), location keyed only on the root, no quaternion
+flips, mesh deformation on real animation < 1 cm (on frames without stretch), the clip FBX has one
+take named after the action with the right length, only the bind pose helper geometry, a bind
+pose covering every bone, default transforms equal to the model's rest pose, no animated
+translation except `pelvis`, the hierarchy matches the model FBX, and the action, slot, NLA and
+frame are restored after export. If the file has no animation, a synthetic one is put on the rig
+temporarily.
 
 Before a release, also import the exported FBX files into Cascadeur and Unity and check them
 manually (see the Cascadeur and Unity sections of the README).

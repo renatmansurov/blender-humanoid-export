@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "cascadeur_export"
-version = "0.3.0"
+version = "0.3.1"
 name = "Cascadeur Export"
 tagline = "UE4-style skeleton and animation FBX from Auto-Rig Pro or Rigify"
 maintainer = "Renat Mansurov"

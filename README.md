@@ -47,22 +47,27 @@ above, so the skeleton is built exactly as for the model.
 - **Folder**: output folder. Empty = next to the .blend. File name: `<blend name>@<action>.fbx`;
   the take inside is named after the action.
 - **FPS** (default 30): clip frame rate. The animation is resampled (the rig is evaluated on
-  subframes), so speed and duration in seconds are preserved; a 10 fps scene exported at 30 fps
-  gets three times as many keys. 0 = scene frame rate, no resampling. The scene and the animation
+  subframes), so speed and duration in seconds are preserved; a 24 fps scene exported at 30 fps
+  gets 30 keys per second instead of 24. 0 = scene frame rate, no resampling. The scene and the animation
   in the .blend are not changed.
 - **Export Animation**: run the export. If the animation lives on a Rigify control rig and the
   meshes on its deform copy, the animation is taken from the control rig.
 
 How keys are baked:
 
-- on every frame each bone gets the world-space deformation of its (first) source bone, with all
+- on every frame each bone gets the world-space rotation of its (first) source bone, with all
   constraints, IK and drivers;
-- only location and rotation are keyed (quaternions without sign flips); scale is dropped, so
-  stretch/squash is not transferred;
+- rotation is keyed on every bone (quaternions without sign flips), location only on `pelvis`;
+  the other bones keep their rest length, so stretch/squash and scale are not transferred
+  (Humanoid ignores them anyway). If the animation stretches bones (e.g. Auto-Rig Pro IK
+  auto-stretch), the export warns with the largest stretch and its frame; fix it in the animation
+  if that pose matters;
 - every frame is keyed, with no simplification in Blender: keyframe reduction is left to Unity
   (Anim. Compression);
-- the FBX contains only the skeleton, no meshes: centimetres, axes and the `root` node match the
-  model;
+- the FBX contains the skeleton and a tiny helper mesh `csc_bind_pose` (one triangle per bone)
+  that stores the rest pose as the FBX bind pose. Without a bind pose Unity would build the clip's
+  avatar from the first animation frame and distort the retargeting. The default transforms are
+  the rest pose too; centimetres, axes and the `root` node match the model;
 - root motion is stored in the `pelvis` translation, the `root` object is not animated; Humanoid
   computes root motion from the hips.
 
@@ -113,11 +118,16 @@ How keys are baked:
 2. Animations from Cascadeur: Rig → Humanoid, Avatar: **Copy From Other Avatar** (the model's
    avatar). On the Model tab enable *Preserve Hierarchy*.
 3. Animations from Blender (`*@*.fbx`, **Export Animation** button): Rig → **Humanoid**, Avatar:
-   **Create From This Model**. The clip skeleton is compatible with the model but may differ from
-   it (fingers, number of spine bones), so each clip has its own avatar and Unity retargets through
-   muscles. If only one side has fingers, they are simply not animated. Animation: *Resample
-   Curves* on, Anim. Compression *Optimal*; *Loop Time* for cycles; Root Transform Rotation /
-   Position (Y) / Position (XZ) → *Bake Into Pose* for in-place animation, or off for root motion.
+   **Create From This Model**. The avatar is built from the rest pose stored in the file, so the
+   clip skeleton only has to be compatible with the model, not identical (fingers, number of spine
+   bones): Unity retargets through muscles. If only one side has fingers, they are simply not
+   animated. When the clip comes from the same character, **Copy From Other Avatar** (the model's
+   avatar) works as well. Animation: *Resample Curves* on, Anim. Compression *Optimal*; *Loop
+   Time* for cycles; Root Transform Rotation / Position (Y) / Position (XZ) → *Bake Into Pose*
+   (Based Upon *Original*) for in-place animation, or off together with *Apply Root Motion* on the
+   Animator for root motion. If the character turns during the clip, the turn is root rotation:
+   with Bake Into Pose off and Apply Root Motion off it is lost. Unity may report that some bones
+   have scale animation that will be discarded: that is float rounding noise, harmless.
 
 Animation limitations: avoid animating the rig at the object level (moving the root control),
 otherwise the skeleton's rest pose depends on the frame the export is built on. Facial animation

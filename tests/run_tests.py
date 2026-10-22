@@ -18,7 +18,7 @@ from mathutils import Matrix, Vector
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
 import cascadeur_export  # noqa: E402
-from cascadeur_export import anim as A, build as B, mapping as M  # noqa: E402
+from cascadeur_export import anim as A, build as B, export as E, mapping as M  # noqa: E402
 
 # Cascadeur's Quick Rigging Tool template the skeleton is checked against; CSC_UE4_TEMPLATE overrides it.
 UE4_TEMPLATE = os.environ.get(
@@ -137,24 +137,40 @@ def fbx_anim_summary(path):
 
     settings = props70(child(root, b"GlobalSettings"))
     info = {"unit": settings.get(b"UnitScaleFactor")[0], "fps": settings.get(b"CustomFrameRate", [None])[0],
-            "takes": {}, "geometry": 0, "keys": 0}
+            "takes": {}, "geometry": 0, "keys": 0, "bind_pose": set(), "lcl": {}, "moving": set()}
     models = {}
+    curves = {}
     for e in child(root, b"Objects").elems:
         if e.id == b"Model":
             models[e.props[0]] = name(e)
+            p = props70(e)
+            info["lcl"][name(e)] = (p.get(b"Lcl Translation", (0.0, 0.0, 0.0)), p.get(b"Lcl Rotation", (0.0, 0.0, 0.0)))
         elif e.id == b"AnimationCurve":
-            info["keys"] = max(info["keys"], len(child(e, b"KeyTime").props[0]))
+            values = child(e, b"KeyValueFloat").props[0]
+            info["keys"] = max(info["keys"], len(values))
+            curves[e.props[0]] = max(values) - min(values) if len(values) else 0.0
         elif e.id == b"Geometry":
             info["geometry"] += 1
         elif e.id == b"AnimationStack":
             p = props70(e)
             info["takes"][name(e)] = (p.get(b"LocalStop", [0])[0] - p.get(b"LocalStart", [0])[0]) / FBX_TICKS
+        elif e.id == b"Pose" and e.props[2] == b"BindPose":
+            info["bind_pose"] = {n.props[0] for pn in e.elems if pn.id == b"PoseNode" for n in pn.elems if n.id == b"Node"}
     parents = {}
+    node_range = {}
+    translation_nodes = {}
     for c in child(root, b"Connections").elems:
         # Bones are also connected to skin clusters; only Model -> Model (or scene root 0) counts.
         if c.props[0] == b"OO" and c.props[1] in models and (c.props[2] in models or c.props[2] == 0):
             parents[models[c.props[1]]] = models.get(c.props[2])
+        elif c.props[0] == b"OP" and c.props[1] in curves:
+            node_range[c.props[2]] = max(node_range.get(c.props[2], 0.0), curves[c.props[1]])
+        elif c.props[0] == b"OP" and c.props[2] in models and c.props[3] == b"Lcl Translation":
+            translation_nodes[c.props[1]] = models[c.props[2]]
     info["parents"] = parents
+    info["bind_pose"] = {models[i] for i in info["bind_pose"] if i in models}
+    # Models whose translation changes during the take by more than 0.01 cm.
+    info["moving"] = {m for n, m in translation_nodes.items() if node_range.get(n, 0.0) > 1e-2}
     return info
 
 
@@ -209,28 +225,38 @@ def test_animation(ctx, rig, names_before):
     check(len(by_bone) == len(result.plan), f"rotation keyed on all {len(result.plan)} bones")
     check(flips == 0, f"no quaternion sign flips ({flips})")
     arm, src = result.armature, result.source
+    keyed = {fc.data_path.split('"')[1] for fc in A._fcurves(action) if fc.data_path.endswith(".location")}
+    roots = {t for t, (_, parent) in result.plan.items() if parent is None}
+    check(keyed == roots, f"location keyed only on the root bone(s) {sorted(keyed)}")
     for frame in sorted({start, (start + end) // 2, end}):
         scene.frame_set(frame)
-        # The baked pose must be exactly the transfer_pose() deformation with scale dropped.
-        max_loc = max_rot = 0.0
+        # The baked pose must be exactly the transfer_pose() deformation with scale dropped: the
+        # rotation of every bone and the location of the root; the other bones keep rest offsets.
+        max_loc = max_rot = stretch = 0.0
         for target, (sources, _) in result.plan.items():
             sb = src.data.bones[sources[0]]
             deform = src.matrix_world @ src.pose.bones[sources[0]].matrix @ (result.rig_matrix @ sb.matrix_local).inverted()
             loc, rot, _ = (deform @ arm.data.bones[target].matrix_local).decompose()
             got_loc, got_rot, _ = (arm.matrix_world @ arm.pose.bones[target].matrix).decompose()
-            max_loc = max(max_loc, (loc - got_loc).length)
+            if target in roots:
+                max_loc = max(max_loc, (loc - got_loc).length)
+            else:
+                stretch = max(stretch, (loc - got_loc).length)
             max_rot = max(max_rot, math.degrees(rot.rotation_difference(got_rot).angle))
         check(max_loc < 1e-4 and max_rot < 0.01,
-              f"frame {frame}: baked pose = rig deformation (max {max_loc*100:.4f} cm, {max_rot:.4f} deg)")
+              f"frame {frame}: baked pose = rig deformation (root max {max_loc*100:.4f} cm, {max_rot:.4f} deg)")
         # Merged bones lose some detail (see [pose comparison]); real animation is gated, a random
-        # synthetic one is only reported.
+        # synthetic one or a frame with dropped stretch is only reported.
+        stretched = stretch > A.STRETCH_TOLERANCE
+        if stretched:
+            print(f"  frame {frame}: stretch up to {stretch*100:.2f} cm dropped")
         for ob in result.meshes:
             a = world_coords(srcs[ob.name], evaluated=True)
             b = world_coords(ob, evaluated=True)
             d = [(x - y).length for x, y in zip(a, b)]
             mean = sum(d) / len(d)
             print(f"  frame {frame} {ob.name}: mean {mean*100:.2f} cm, max {max(d)*100:.2f} cm")
-            if ob.name.lower().startswith("body") and not synthetic:
+            if ob.name.lower().startswith("body") and not synthetic and not stretched:
                 check(mean < 0.01, f"baked frame {frame} {ob.name}: mean deviation < 1 cm")
 
     # Resampled to 3x the scene rate, every third key must be the key of the matching scene frame.
@@ -285,13 +311,22 @@ def test_animation(ctx, rig, names_before):
             keys = round((last - first) * rate / fps) + 1
             check(info["keys"] == keys and abs(info["fps"] - rate) < 1e-3,
                   f"{mode}: {info['keys']} keys at {info['fps']:g} fps (expected {keys} at {rate:g})")
-            check(info["geometry"] == 0, f"{mode}: no geometry")
+            check(info["geometry"] == 1, f"{mode}: only the bind pose helper geometry ({info['geometry']})")
             check(abs(info["unit"] - 1.0) < 1e-6, f"{mode}: FBX unit is centimetres")
+            bones = set(info["parents"]) - {"root", E.BIND_POSE_MESH}
             common = set(info["parents"]) & set(character["parents"])
-            check("root" in common and set(info["parents"]) == common,
-                  f"{mode}: skeleton is a subset of the character's")
-            diff = {n for n in common if info["parents"][n] != character["parents"][n]}
+            check("root" in common and bones <= common, f"{mode}: skeleton is a subset of the character's")
+            diff = {n for n in bones if info["parents"][n] != character["parents"][n]}
             check(not diff, f"{mode}: bone parents match the character FBX {sorted(diff)[:5]}")
+            check(info["parents"].get(E.BIND_POSE_MESH, "") is None,
+                  f"{mode}: helper mesh is a second top-level node next to root")
+            missing = bones - info["bind_pose"]
+            check(not missing, f"{mode}: bind pose covers every bone (missing {sorted(missing)[:5]})")
+            # Default transforms are the rest pose, the same as in the character FBX.
+            lcl_diff = [n for n in bones | {"root"} if any(
+                abs(a - b) > 1e-3 for x, y in zip(info["lcl"][n], character["lcl"][n]) for a, b in zip(x, y))]
+            check(not lcl_diff, f"{mode}: default transforms = character rest pose {sorted(lcl_diff)[:5]}")
+            check(info["moving"] <= {"pelvis"}, f"{mode}: only pelvis translation animated {sorted(info['moving'])[:5]}")
 
 
 def main():
