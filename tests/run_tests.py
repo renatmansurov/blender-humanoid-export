@@ -11,6 +11,7 @@ import math
 import os
 import random
 import sys
+import time
 
 import bpy
 from mathutils import Matrix, Vector
@@ -18,7 +19,7 @@ from mathutils import Matrix, Vector
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
 import cascadeur_export  # noqa: E402
-from cascadeur_export import anim as A, build as B, export as E, mapping as M  # noqa: E402
+from cascadeur_export import anim as A, build as B, checks as C, export as E, mapping as M  # noqa: E402
 
 # Cascadeur's Quick Rigging Tool template the skeleton is checked against; CSC_UE4_TEMPLATE overrides it.
 UE4_TEMPLATE = os.environ.get(
@@ -76,7 +77,34 @@ def deform_weight_sums(ob, deform_names):
     return [sum(g.weight for g in v.groups if g.group in idx) for v in ob.data.vertices]
 
 
+def builtin_paths():
+    """UE4_New joint paths without the twist bones, for machines without Cascadeur (CI)."""
+    parents = {"pelvis": "root", "spine_01": "pelvis", "spine_02": "spine_01", "spine_03": "spine_02",
+               "neck_01": "spine_03", "head": "neck_01"}
+    for s in "lr":
+        parents.update({f"clavicle_{s}": "spine_03", f"upperarm_{s}": f"clavicle_{s}",
+                        f"lowerarm_{s}": f"upperarm_{s}", f"hand_{s}": f"lowerarm_{s}",
+                        f"thigh_{s}": "pelvis", f"calf_{s}": f"thigh_{s}", f"foot_{s}": f"calf_{s}",
+                        f"ball_{s}": f"foot_{s}"})
+        for f in M.FINGERS:
+            parents.update({f"{f}_01_{s}": f"hand_{s}", f"{f}_02_{s}": f"{f}_01_{s}", f"{f}_03_{s}": f"{f}_02_{s}"})
+    paths = {}
+    for joint, parent in parents.items():
+        path = []
+        while parent != "root":
+            path.insert(0, parent)
+            parent = parents[parent]
+        paths[joint] = ["root"] + path
+    # UE4_New has no slot for spine_03, it is only on the paths.
+    del paths["spine_03"]
+    return paths
+
+
 def template_paths():
+    builtin = builtin_paths()
+    if not os.path.exists(UE4_TEMPLATE):
+        print(f"  {UE4_TEMPLATE} not found, using the built-in UE4_New hierarchy")
+        return builtin
     with open(UE4_TEMPLATE, encoding="utf-8") as f:
         doc = json.load(f)
     paths = {}
@@ -86,6 +114,7 @@ def template_paths():
         for s in d["Sections"]:
             for n in s["Names"]:
                 paths[n["Joint name"]] = n.get("Joint path") or []
+    check(paths == builtin, "built-in UE4_New hierarchy matches the template")
     return paths
 
 
@@ -329,6 +358,120 @@ def test_animation(ctx, rig, names_before):
             check(info["moving"] <= {"pelvis"}, f"{mode}: only pelvis translation animated {sorted(info['moving'])[:5]}")
 
 
+def saved_object_names(path):
+    with bpy.data.libraries.load(path) as (data_from, _data_to):
+        return list(data_from.objects), list(data_from.collections)
+
+
+def test_save(ctx, rig, names_before):
+    """Saving with the preview built must write the source names; returns a file saved without
+    the add-on's save handler, for test_load_repair()."""
+    print("[save]")
+    result = B.build(ctx, rig, keep_face=True)
+    ctx.view_layer.objects.active = result.armature
+    bpy.ops.object.mode_set(mode='POSE')
+    path = os.path.join(OUT_DIR, "save_test.blend")
+    bpy.ops.wm.save_as_mainfile(filepath=path, copy=True)
+    check(not B.has_preview(), "preview removed before saving (from pose mode)")
+    check(sorted(o.name for o in bpy.data.objects) == names_before, "object names restored by saving")
+    objects, collections = saved_object_names(path)
+    # Objects without users are not written, so the saved names are a subset.
+    check(set(objects) <= set(names_before) and B.TMP_COLLECTION not in collections,
+          f"saved file has the source names and no preview ({sorted(set(objects) - set(names_before))[:5]})")
+    ctx.view_layer.objects.active = rig
+
+    B.build(ctx, rig, keep_face=True)
+    bpy.app.handlers.save_pre.remove(cascadeur_export._on_save_pre)
+    broken = os.path.join(OUT_DIR, "broken_preview.blend")
+    try:
+        bpy.ops.wm.save_as_mainfile(filepath=broken, copy=True)
+    finally:
+        bpy.app.handlers.save_pre.append(cascadeur_export._on_save_pre)
+    B.clear(ctx)
+    ctx.view_layer.objects.active = rig
+    objects, _ = saved_object_names(broken)
+    check(any(n.endswith("__csc_src") for n in objects), "without the handler the file keeps renamed objects")
+    return broken
+
+
+def remove_object(ctx, ob):
+    # Without the sync the view layer still lists the removed object (as None).
+    bpy.data.objects.remove(ob)
+    ctx.view_layer.update()
+
+
+def test_checks(ctx, rig, names_before):
+    print("[checks]")
+    start = time.perf_counter()
+    items = C.character(ctx, rig, True) + C.animation(ctx, rig, 'ACTIVE', OUT_DIR) + C.animation(ctx, rig, 'ALL', OUT_DIR)
+    print(f"  took {(time.perf_counter() - start) * 1000:.1f} ms")
+    for level, text in items:
+        print(f"  {level.lower()}: {text}")
+    check(not any(level == 'ERROR' for level, _ in items), "no check errors on the test character")
+    check(any(level == 'ERROR' for level, _ in C.animation(ctx, rig, 'ACTIVE', None)), "missing folder reported")
+
+    def reported(level, *words):
+        found = C.character(ctx, rig, True)
+        return any(lv == level and all(w in t for w in words) for lv, t in found)
+
+    me = bpy.data.meshes.new("csc_test_prop")
+    prop = bpy.data.objects.new("csc_test_prop", me)
+    ctx.scene.collection.objects.link(prop)
+    prop.parent, prop.parent_type, prop.parent_bone = rig, 'BONE', rig.data.bones[0].name
+    check(reported('WARNING', "csc_test_prop", "bone"), "mesh parented to a bone reported")
+    remove_object(ctx, prop)
+    bpy.data.meshes.remove(me)
+
+    me = bpy.data.meshes.new("csc_test_keys")
+    me.from_pydata([(0, 0, 0), (0.1, 0, 0), (0, 0.1, 0)], [], [(0, 1, 2)])
+    ob = bpy.data.objects.new("csc_test_keys", me)
+    ctx.scene.collection.objects.link(ob)
+    ob.shape_key_add(name="Basis")
+    ob.shape_key_add(name="Key")
+    ob.modifiers.new("Armature", 'ARMATURE').object = rig
+    ob.modifiers.new("Subdivision", 'SUBSURF')
+    check(reported('WARNING', "csc_test_keys", "shape keys"), "shape keys dropped by a modifier reported")
+    ob.modifiers.remove(ob.modifiers["Subdivision"])
+    ob.modifiers.new("Weighted Normal", 'WEIGHTED_NORMAL')
+    check(not reported('WARNING', "csc_test_keys"), "normal-only modifier keeps shape keys, no warning")
+    ob.hide_set(True)
+    check(reported('INFO', "Hidden", "csc_test_keys"), "hidden bound mesh reported")
+    remove_object(ctx, ob)
+    bpy.data.meshes.remove(me)
+
+    empty = bpy.data.objects.new("csc_test_empty", None)
+    ctx.scene.collection.objects.link(empty)
+    empty.keyframe_insert("location", frame=1)
+    check(A.object_transform_animated(empty), "object-level animation detected")
+    action = empty.animation_data.action
+    remove_object(ctx, empty)
+    bpy.data.actions.remove(action)
+
+    arm = bpy.data.objects.new("csc_test_arm", bpy.data.armatures.new("csc_test_arm"))
+    ctx.scene.collection.objects.link(arm)
+    ctx.view_layer.update()  # creates arm.pose
+    check(C.character(ctx, arm, True)[0][0] == 'ERROR', "unsupported rig reported")
+    data = arm.data
+    remove_object(ctx, arm)
+    bpy.data.armatures.remove(data)
+
+    B.build(ctx, rig, keep_face=True)
+    check(reported('INFO', "Preview is built"), "built preview reported")
+    B.clear(ctx)
+    ctx.view_layer.objects.active = rig
+    check(sorted(o.name for o in bpy.data.objects) == names_before, "checks: object names restored")
+
+
+def test_load_repair(path, names_before, mesh_names):
+    """Opens a file saved with the preview (replaces the session, so it runs last)."""
+    print("[load repair]")
+    bpy.ops.wm.open_mainfile(filepath=path)
+    names = {o.name for o in bpy.data.objects}
+    check(not B.has_preview(), "leftover preview removed on load")
+    check(names <= set(names_before) and set(mesh_names) <= names,
+          f"source names restored on load ({sorted(names - set(names_before))[:5]})")
+
+
 def main():
     cascadeur_export.register()
     ctx = bpy.context
@@ -488,6 +631,8 @@ def main():
     check(sorted(o.name for o in bpy.data.objects) == names_before, "object names restored after clear")
     check(B.TMP_COLLECTION not in bpy.data.collections, "temp collection removed")
 
+    broken = test_save(ctx, rig, names_before)
+
     print("[export]")
     ctx.view_layer.objects.active = rig
     ctx.scene.csc_export.filepath = os.path.join(OUT_DIR, "operator_export.fbx")
@@ -502,6 +647,8 @@ def main():
     check(150 < body_top < 250, f"character height in cm ({body_top})")
 
     test_animation(ctx, rig, names_before)
+    test_checks(ctx, rig, names_before)
+    test_load_repair(broken, names_before, [m.name for m in meshes])
 
     print("\nRESULT:", "PASS" if not failures else f"{len(failures)} FAILURE(S)")
     for f in failures:

@@ -6,6 +6,28 @@ follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Pre-export checks in the panel, shown above the export buttons only when there is a problem:
+  errors the export would stop on (unsupported rig, no visible meshes, no animation, NLA tweak mode,
+  no output folder) and what would be lost (shape keys dropped by a modifier, meshes parented to a
+  bone, hidden meshes, bones the rig does not have, a rig animated as an object).
+- When an export reports several warnings, they are also shown together in a popup; the status bar
+  only shows the last one.
+- CI runs the tests on generated Rigify characters in Blender 4.2 and 5.2
+  (`tests/run_rigify_variants.sh`); the extension is only built and released when they pass.
+
+### Changed
+
+- The sidebar tab is called **Export** instead of **Mannequin**.
+
+### Fixed
+
+- Saving the .blend while Build Preview existed stored the renamed source objects (`*__csc_src`)
+  and the temporary `CSC_Export_TMP` collection. The preview is now removed before saving, and a
+  file saved that way is repaired when it is opened.
+- In Blender 4.2 the take in an animation clip was named `<action>.001` instead of `<action>`.
+
 ## [0.3.1]
 
 ### Fixed

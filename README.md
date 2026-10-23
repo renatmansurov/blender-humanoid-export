@@ -19,7 +19,7 @@ To build the zip yourself, see [CONTRIBUTING.md](CONTRIBUTING.md#building).
 
 ## Usage
 
-3D View → N panel → **Mannequin** tab.
+3D View → N panel → **Export** tab.
 
 - **Armature**: an Auto-Rig Pro or Rigify rig. Empty = the active object (or the armature of the
   selected mesh). If a Rigify control rig is selected but the meshes are bound to its deform copy
@@ -31,9 +31,17 @@ To build the zip yourself, see [CONTRIBUTING.md](CONTRIBUTING.md#building).
 - **Export Character**: run the export.
 - **Build Preview** / ✕: build the temporary skeleton and meshes in the `CSC_Export_TMP`
   collection for inspection / remove them. While the preview exists, the source objects are
-  temporarily renamed (`*__csc_src`); ✕ restores the names.
+  temporarily renamed (`*__csc_src`); ✕ restores the names. Saving the .blend removes the preview
+  first, so the file keeps the source names; a file that still got saved with a preview (autosave,
+  a crash) is repaired when it is opened with the add-on enabled.
 
 All visible meshes with an Armature modifier pointing at the rig are exported.
+
+The panel checks the setup while you work and, only when something is wrong, lists it above the
+export buttons: errors the export would stop on (unsupported rig, no visible meshes, no animation,
+NLA tweak mode, no output folder) and warnings about what would be lost (shape keys dropped by a
+modifier, meshes parented to a bone, hidden meshes, bones the rig does not have, a rig animated as an
+object). When an export reports several warnings, they are also shown together in a popup.
 
 ### Animation (Unity)
 

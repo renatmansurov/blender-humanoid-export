@@ -2,13 +2,20 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import os
+import textwrap
 
 import bpy
 
 from . import anim as anim_mod
 from . import build as build_mod
+from . import checks
 from . import export as export_mod
 from . import mapping
+
+ADDON_TITLE = "Mannequin Export"
+CHECK_ICONS = {'ERROR': 'CANCEL', 'WARNING': 'ERROR', 'INFO': 'INFO'}
+# Line length in popups, which are not bound to a panel width.
+POPUP_WIDTH = 90
 
 
 def _poll_armature(self, ob):
@@ -91,9 +98,53 @@ def _restore_mode(context, mode):
         bpy.ops.object.mode_set(mode='POSE')
 
 
-def _report_build(op, result):
+def _wrapped_labels(layout, lines, width, icon):
+    """One label per wrapped line; the icon is on the first line of each entry."""
+    col = layout.column(align=True)
+    for text in lines:
+        for i, line in enumerate(textwrap.wrap(text, width) or [""]):
+            col.label(text=line, icon=icon if i == 0 else 'BLANK1')
+
+
+def _popup(window_manager, lines, title, icon):
+    def draw(menu, _context):
+        _wrapped_labels(menu.layout, lines, POPUP_WIDTH, 'DOT')
+
+    window_manager.popup_menu(draw, title=title, icon=icon)
+
+
+def _notify(message):
+    """Prints ``message`` and shows it in a popup once the UI can draw one (handlers run before)."""
+    print(f"{ADDON_TITLE}: {message}")
+    if bpy.app.background:
+        return
+
+    def show():
+        wm = bpy.context.window_manager
+        if wm is not None and wm.windows:
+            with bpy.context.temp_override(window=wm.windows[0]):
+                _popup(wm, [message], ADDON_TITLE, 'INFO')
+
+    bpy.app.timers.register(show, first_interval=0.2)
+
+
+def _report_build(op, context, result):
     for w in result.warnings:
         op.report({'WARNING'}, w)
+    # The status bar only shows the last report; several warnings also go into one popup.
+    if len(result.warnings) > 1 and not bpy.app.background and context.window is not None:
+        _popup(context.window_manager, result.warnings, f"{len(result.warnings)} warnings", 'ERROR')
+
+
+def _draw_checks(layout, context, items):
+    """Draws the check results, or nothing when everything is fine."""
+    if not items:
+        return
+    region = getattr(context, "region", None)
+    width = max(20, int((region.width if region else 300) / (7 * context.preferences.view.ui_scale)))
+    col = layout.box().column(align=True)
+    for level, text in items:
+        _wrapped_labels(col, [text], width, CHECK_ICONS[level])
 
 
 class CSC_OT_export_character(bpy.types.Operator):
@@ -123,7 +174,7 @@ class CSC_OT_export_character(bpy.types.Operator):
         finally:
             build_mod.clear(context)
             _restore_mode(context, mode)
-        _report_build(self, result)
+        _report_build(self, context, result)
         self.report({'INFO'}, f"Exported {result.bone_count} bones, {len(result.meshes)} mesh(es) to {filepath}")
         return {'FINISHED'}
 
@@ -172,7 +223,7 @@ class CSC_OT_export_animation(bpy.types.Operator):
         finally:
             build_mod.clear(context)
             _restore_mode(context, mode)
-        _report_build(self, result)
+        _report_build(self, context, result)
         where = written[0] if len(written) == 1 else f"{len(written)} files in {directory}"
         self.report({'INFO'}, f"Exported {result.bone_count} bones to {where}")
         return {'FINISHED'}
@@ -195,7 +246,7 @@ class CSC_OT_build_preview(bpy.types.Operator):
             build_mod.clear(context)
             self.report({'ERROR'}, str(e))
             return {'CANCELLED'}
-        _report_build(self, result)
+        _report_build(self, context, result)
         self.report({'INFO'}, f"Preview: {result.bone_count} bones in '{build_mod.TMP_COLLECTION}'")
         return {'FINISHED'}
 
@@ -217,13 +268,13 @@ class CSC_PT_panel(bpy.types.Panel):
     bl_label = "Mannequin Export"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = "Mannequin"
+    bl_category = "Export"
 
     def draw(self, context):
         layout = self.layout
         settings = context.scene.csc_export
         layout.prop(settings, "armature")
-        rig = _resolve_armature(context)
+        selected = rig = _resolve_armature(context)
         if rig is not None:
             rig = build_mod.find_deform_rig(rig, context.view_layer)
             profile = mapping.detect(rig)
@@ -237,6 +288,8 @@ class CSC_PT_panel(bpy.types.Panel):
             path = _resolve_filepath(context)
             layout.label(text=bpy.path.basename(path) if path else "Save the .blend first", icon='FILE')
         layout.prop(settings, "keep_face")
+        if selected is not None:
+            _draw_checks(layout, context, checks.safe(checks.character, context, selected, settings.keep_face))
         layout.operator(CSC_OT_export_character.bl_idname, icon='EXPORT')
         row = layout.row(align=True)
         row.operator(CSC_OT_build_preview.bl_idname, icon='HIDE_OFF')
@@ -252,7 +305,7 @@ class CSC_PT_panel(bpy.types.Panel):
         out = f" -> {settings.anim_fps} fps" if settings.anim_fps and abs(settings.anim_fps - fps) > 1e-6 else ""
         if settings.anim_source == 'ACTIVE':
             if rig is not None:
-                anim_rig = anim_mod.find_animated_rig(_resolve_armature(context), rig)
+                anim_rig = anim_mod.find_animated_rig(selected, rig)
                 box.label(text=_anim_filename(anim_mod.active_clip_name(anim_rig)), icon='FILE')
             seconds = (scene.frame_end - scene.frame_start) / fps
             box.label(text=f"Frames {scene.frame_start}-{scene.frame_end} at {fps:g} fps{out}, {seconds:.2f} s",
@@ -260,7 +313,48 @@ class CSC_PT_panel(bpy.types.Panel):
         else:
             box.label(text=_anim_filename("<action>", sanitize=False), icon='FILE')
             box.label(text=f"{fps:g} fps{out}", icon='TIME')
+        if selected is not None:
+            _draw_checks(box, context, checks.safe(checks.animation, context, selected, settings.anim_source,
+                                                   _resolve_anim_dir(context)))
         box.operator(CSC_OT_export_animation.bl_idname, icon='EXPORT')
+
+
+@bpy.app.handlers.persistent
+def _on_save_pre(*_args):
+    """A file saved with the preview would keep the renamed source objects and the temporary ones."""
+    if not build_mod.has_preview():
+        return
+    context = bpy.context
+    ob = context.view_layer.objects.active if context.view_layer else None
+    if ob is not None and ob.get(build_mod.TMP_PROP) and ob.mode != 'OBJECT':
+        try:
+            bpy.ops.object.mode_set(mode='OBJECT')
+        except RuntimeError:
+            pass
+    build_mod.clear(context)
+    _notify("Export preview removed before saving; source object names restored")
+
+
+@bpy.app.handlers.persistent
+def _on_load_post(*_args):
+    """Repairs files saved with a preview (autosave, a crash, an older version of the add-on)."""
+    if build_mod.has_preview():
+        restored = build_mod.clear(bpy.context)
+        _notify(f"Removed a leftover export preview; restored {restored} object name(s)")
+
+
+HANDLERS = (
+    (bpy.app.handlers.save_pre, _on_save_pre),
+    (bpy.app.handlers.load_post, _on_load_post),
+)
+
+
+def _remove_handlers():
+    # Also drops copies left by a previous load of the module (add-on reload).
+    for handlers, fn in HANDLERS:
+        for h in [h for h in handlers if getattr(h, "__qualname__", None) == fn.__qualname__
+                  and getattr(h, "__module__", None) == fn.__module__]:
+            handlers.remove(h)
 
 
 classes = (
@@ -277,9 +371,13 @@ def register():
     for cls in classes:
         bpy.utils.register_class(cls)
     bpy.types.Scene.csc_export = bpy.props.PointerProperty(type=CSC_Settings)
+    _remove_handlers()
+    for handlers, fn in HANDLERS:
+        handlers.append(fn)
 
 
 def unregister():
+    _remove_handlers()
     del bpy.types.Scene.csc_export
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)

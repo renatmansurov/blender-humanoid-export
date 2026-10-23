@@ -68,6 +68,19 @@ def animates_bones(action, rig):
     return False
 
 
+OBJECT_TRANSFORMS = ("location", "rotation_euler", "rotation_quaternion", "rotation_axis_angle", "scale")
+
+
+def object_transform_animated(ob):
+    """Whether the active action or an NLA strip of ``ob`` keys its object transform (not its bones)."""
+    ad = ob.animation_data
+    if ad is None:
+        return False
+    actions = [ad.action] + [s.action for t in ad.nla_tracks for s in t.strips]
+    return any(fc.data_path in OBJECT_TRANSFORMS and fc.keyframe_points
+               for a in actions if a is not None for fc in _fcurves(a))
+
+
 def rig_actions(rig):
     """Actions that animate bones of ``rig``."""
     return [a for a in bpy.data.actions if not a.get(build_mod.TMP_PROP) and animates_bones(a, rig)]

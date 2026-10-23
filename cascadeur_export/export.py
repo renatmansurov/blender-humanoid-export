@@ -115,6 +115,9 @@ def export_anim_fbx(context, filepath, build, action, name, fps=None):
     track = ad.nla_tracks.new()
     track.name = name
     strip = track.strips.new(name, int(action.frame_range[0]), action)
+    # The take is named after the strip. Blender 4.2 names a new strip after its action, which got
+    # a ".001" suffix next to the source action of the same name.
+    strip.name = name
     if hasattr(strip, "action_slot") and strip.action_slot is None and action.slots:
         strip.action_slot = action.slots[0]
     helper = _bind_pose_mesh(build)

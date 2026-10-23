@@ -250,12 +250,20 @@ def _bake_normals(context, ob, modifiers):
     ob.data.normals_split_custom_set(normals)
 
 
+def shape_key_dropping_modifiers(ob):
+    """Modifiers whose application on export drops the shape keys of ``ob`` (empty if it keeps them)."""
+    others = [m for m in ob.modifiers if m.type != 'ARMATURE']
+    if not ob.data.shape_keys or all(m.type in NORMAL_ONLY_MODIFIERS for m in others):
+        return []
+    return others
+
+
 def _apply_modifiers(context, ob, warnings):
     """Bakes non-armature modifiers into the mesh, so scaling the data cannot change their effect."""
     others = [m for m in ob.modifiers if m.type != 'ARMATURE']
     if not others:
         return
-    if ob.data.shape_keys and all(m.type in NORMAL_ONLY_MODIFIERS for m in others):
+    if ob.data.shape_keys and not shape_key_dropping_modifiers(ob):
         _bake_normals(context, ob, others)
         return
     if ob.data.shape_keys:
@@ -346,8 +354,17 @@ def build(context, rig, keep_face=True, unit_scale=1.0, meshes=True):
     return result
 
 
+def has_preview():
+    """Whether temporary export data or renamed source objects are in the file."""
+    return (TMP_COLLECTION in bpy.data.collections
+            or any(ob.library is None and (ob.get(TMP_PROP) or ob.get(ORIGINAL_NAME_PROP) is not None)
+                   for ob in bpy.data.objects)
+            or any(a.get(TMP_PROP) for a in bpy.data.actions))
+
+
 def clear(context):
-    """Removes temporary objects and baked actions and restores renamed originals."""
+    """Removes temporary objects and baked actions and restores renamed originals. Returns the
+    number of restored names."""
     for action in [a for a in bpy.data.actions if a.get(TMP_PROP)]:
         bpy.data.actions.remove(action)
     coll = bpy.data.collections.get(TMP_COLLECTION)
@@ -361,8 +378,16 @@ def clear(context):
                 bpy.data.armatures.remove(data)
     if coll is not None:
         bpy.data.collections.remove(coll)
+    restored = 0
     for ob in bpy.data.objects:
         original = ob.get(ORIGINAL_NAME_PROP)
-        if original is not None:
+        # Linked objects cannot be renamed; only local ones are ever renamed by build().
+        if original is not None and ob.library is None:
             del ob[ORIGINAL_NAME_PROP]
             ob.name = original
+            restored += 1
+    # Removed objects stay in the view layer's object list until it is synced again.
+    view_layer = getattr(context, "view_layer", None)
+    if view_layer is not None:
+        view_layer.update()
+    return restored
