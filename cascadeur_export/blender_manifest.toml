@@ -2,8 +2,8 @@ schema_version = "1.0.0"
 
 id = "cascadeur_export"
 version = "0.3.1"
-name = "Cascadeur Export"
-tagline = "UE4-style skeleton and animation FBX from Auto-Rig Pro or Rigify"
+name = "Mannequin Export"
+tagline = "UE4 Mannequin skeleton and animation FBX for Cascadeur and Unity"
 maintainer = "Renat Mansurov"
 type = "add-on"
 

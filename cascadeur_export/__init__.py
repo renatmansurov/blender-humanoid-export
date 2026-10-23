@@ -98,7 +98,7 @@ def _report_build(op, result):
 
 class CSC_OT_export_character(bpy.types.Operator):
     bl_idname = "cascadeur.export_character"
-    bl_label = "Export FBX"
+    bl_label = "Export Character"
     bl_description = "Build a clean UE4-style skeleton from the rig and export it with its meshes to FBX"
     bl_options = {'REGISTER'}
 
@@ -214,10 +214,10 @@ class CSC_OT_clear_preview(bpy.types.Operator):
 
 
 class CSC_PT_panel(bpy.types.Panel):
-    bl_label = "Cascadeur Export"
+    bl_label = "Mannequin Export"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = "Cascadeur"
+    bl_category = "Mannequin"
 
     def draw(self, context):
         layout = self.layout

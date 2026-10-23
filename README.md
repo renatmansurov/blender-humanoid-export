@@ -1,4 +1,4 @@
-# Cascadeur Export
+# Mannequin Export
 
 A Blender add-on (Blender 4.2+ / 5.x) that turns an Auto-Rig Pro or Rigify character into a clean
 UE4 Mannequin-style skeleton for [Cascadeur](https://cascadeur.com) and Unity.
@@ -19,7 +19,7 @@ To build the zip yourself, see [CONTRIBUTING.md](CONTRIBUTING.md#building).
 
 ## Usage
 
-3D View → N panel → **Cascadeur** tab.
+3D View → N panel → **Mannequin** tab.
 
 - **Armature**: an Auto-Rig Pro or Rigify rig. Empty = the active object (or the armature of the
   selected mesh). If a Rigify control rig is selected but the meshes are bound to its deform copy
@@ -28,7 +28,7 @@ To build the zip yourself, see [CONTRIBUTING.md](CONTRIBUTING.md#building).
 - **File**: output FBX. Empty = `<blend name>_cascadeur.fbx` next to the .blend.
 - **Keep Jaw & Eyes**: keep `jaw`, `eye_l`, `eye_r`; all other face bones are merged into
   head/jaw.
-- **Export FBX**: run the export.
+- **Export Character**: run the export.
 - **Build Preview** / ✕: build the temporary skeleton and meshes in the `CSC_Export_TMP`
   collection for inspection / remove them. While the preview exists, the source objects are
   temporarily renamed (`*__csc_src`); ✕ restores the names.
