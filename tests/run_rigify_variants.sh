@@ -14,7 +14,7 @@ BLENDER="$1"
 TESTS="$(cd "$(dirname "$0")" && pwd)"
 OUT="${2:-$TESTS/out/rigify}"
 shift $(( $# < 2 ? $# : 2 ))
-VARIANTS="${*:-human basic human_noface human_torso2 human_torso5 human_neck1 human_neck3 human_torso2_neck3}"
+VARIANTS="${*:-human basic human_noface human_torso2 human_torso5 human_neck1 human_neck3 human_torso2_neck3 human_tail}"
 
 mkdir -p "$OUT"
 failed=0

@@ -19,6 +19,8 @@ from . import mapping
 TMP_COLLECTION = "CSC_Export_TMP"
 ORIGINAL_NAME_PROP = "csc_original_name"
 TMP_PROP = "csc_export_tmp"
+# Constraints through which a deform bone follows a control bone that a mesh is parented to.
+FOLLOW_CONSTRAINTS = {'COPY_TRANSFORMS', 'CHILD_OF', 'COPY_ROTATION', 'COPY_LOCATION'}
 # Modifiers that only change normals; on meshes with shape keys they are baked, not applied.
 NORMAL_ONLY_MODIFIERS = {'WEIGHTED_NORMAL', 'NORMAL_EDIT'}
 
@@ -33,6 +35,8 @@ class Build:
         self.meshes = []
         self.bone_count = 0
         self.warnings = []
+        # Targets built from extra deform chains (see _plan_extras()).
+        self.extras = []
         # What anim.bake() needs: the deform rig, its plan, the unit scale and the rig's world
         # matrix the skeleton was built from.
         self.source = None
@@ -61,6 +65,34 @@ def find_meshes(rig, view_layer):
         and not ob.get(TMP_PROP)
         and ob.visible_get(view_layer=view_layer)
         and any(m.type == 'ARMATURE' and m.object == rig for m in ob.modifiers)
+    ]
+
+
+def linked_rigs(rig, deform_rig):
+    """Armatures a mesh can be parented to for ``rig``: itself, its deform rig and the armatures
+    the deform rig's bones are constrained to (the control rig of a deform-only copy)."""
+    rigs = {rig, deform_rig}
+    for pb in deform_rig.pose.bones:
+        for c in pb.constraints:
+            target = getattr(c, "target", None)
+            if target is not None and target.type == 'ARMATURE':
+                rigs.add(target)
+    return rigs
+
+
+def find_bone_children(rigs, deform_rig, view_layer, visible=True):
+    """Meshes parented to a bone of one of ``rigs`` that ``deform_rig`` does not deform (eyes,
+    helmets, props); they are exported skinned rigidly to one bone. ``visible=False`` returns the
+    hidden ones instead."""
+    return [
+        ob for ob in view_layer.objects
+        if ob.type == 'MESH'
+        and ob.parent in rigs
+        and ob.parent_type == 'BONE'
+        and ob.parent_bone in ob.parent.data.bones
+        and not ob.get(TMP_PROP)
+        and ob.visible_get(view_layer=view_layer) == visible
+        and not any(m.type == 'ARMATURE' and m.object == deform_rig for m in ob.modifiers)
     ]
 
 
@@ -100,6 +132,47 @@ def _plan_skeleton(rig, keep_face, warnings):
             present.sort(key=lambda s: (bones[s].head_local - origin).length)
         plan[target] = (present, parent)
     return plan
+
+
+def _source_targets(plan, aliases):
+    """Source bone, or a bone that stands for it (see Profile.aliases), -> its target."""
+    source_target = {}
+    for t, (sources, _) in plan.items():
+        for s in sources:
+            for a in aliases(s):
+                source_target.setdefault(a, t)
+    source_target.update({s: t for t, (sources, _) in plan.items() for s in sources})
+    return source_target
+
+
+def _plan_extras(rig, plan, profile, warnings):
+    """Extra deform chains (tail, hair, skirt, cape): every unmapped deform bone the profile does
+    not merge on purpose becomes a target of its own, named like the source bone. Returns
+    {target: ([source], parent target)} in parent-first order; each one hangs off the target of
+    its nearest exported ancestor, or off the nearest target by position if it has none."""
+    sources = {s for ss, _ in plan.values() for s in ss}
+    source_target = _source_targets(plan, profile.aliases)
+    bones = sorted((b for b in rig.data.bones
+                    if b.use_deform and b.name not in sources and not profile.merged(b)),
+                   key=lambda b: len(b.parent_recursive))
+    extras = {}
+    orphans = []
+    for b in bones:
+        parent = next((source_target[p.name] for p in b.parent_recursive if p.name in source_target), None)
+        if parent is None:
+            parent = _nearest_target(rig, {**plan, **extras}, b.head_local, b.tail_local)
+            orphans.append(f"{b.name}->{parent}")
+        target = b.name
+        while target in plan or target in extras:
+            target += "_extra"
+        extras[target] = ([b.name], parent)
+        for a in profile.aliases(b.name):
+            source_target.setdefault(a, target)
+        source_target[b.name] = target
+    if orphans:
+        warnings.append(f"{len(orphans)} extra deform bone(s) without exported ancestor placed under "
+                        f"the nearest bone: {orphans[:5]}")
+    return extras
 
 
 def _claim_name(name):
@@ -149,12 +222,7 @@ def _build_armature(context, rig, plan, collection, scale, reversed_targets):
 
 def _weight_targets(rig, plan, aliases, warnings):
     """Maps every deform bone of the rig to the target bone that receives its weights."""
-    source_target = {}
-    for t, (sources, _) in plan.items():
-        for s in sources:
-            for a in aliases(s):
-                source_target.setdefault(a, t)
-    source_target.update({s: t for t, (sources, _) in plan.items() for s in sources})
+    source_target = _source_targets(plan, aliases)
     result = {}
     orphans = []
     for bone in rig.data.bones:
@@ -164,7 +232,7 @@ def _weight_targets(rig, plan, aliases, warnings):
         while b is not None and b.name not in source_target:
             b = b.parent
         if b is None:
-            target = _nearest_target(rig, plan, bone)
+            target = _nearest_target(rig, plan, bone.head_local, bone.tail_local)
             orphans.append(f"{bone.name}->{target}")
             result[bone.name] = target
         else:
@@ -174,10 +242,11 @@ def _weight_targets(rig, plan, aliases, warnings):
     return result
 
 
-def _nearest_target(rig, plan, bone):
-    """Target whose source bones pass closest to the middle of ``bone``."""
+def _nearest_target(rig, plan, head, tail):
+    """Target whose source bones pass closest to the middle of the segment ``head``-``tail`` (in
+    the rig's armature space)."""
     bones = rig.data.bones
-    mid = (bone.head_local + bone.tail_local) / 2
+    mid = (head + tail) / 2
 
     def distance(source):
         b = bones[source]
@@ -189,6 +258,48 @@ def _nearest_target(rig, plan, bone):
         return (point - mid).length
 
     return min(plan, key=lambda t: min(distance(s) for s in plan[t][0]))
+
+
+def _bone_child_target(ob, rig, plan, bone_target, source_target):
+    """(target, guessed) for a mesh parented to a bone (see find_bone_children()): the target of
+    that bone if it is a source or a deform bone, else of a source or deform bone that follows it
+    as its child or through a constraint (controls such as ARP's c_head.x or Rigify's head), else
+    the nearest target by position (``guessed``). A control's ancestors are not used: they often
+    lead elsewhere (c_head.x hangs off the neck controls)."""
+    name = ob.parent_bone
+    for known in (source_target, bone_target):
+        if name in known:
+            return known[name], False
+    for known in (source_target, bone_target):
+        for pb in rig.pose.bones:
+            if pb.name in known and (
+                    (ob.parent == rig and pb.parent is not None and pb.parent.name == name)
+                    or any(c.type in FOLLOW_CONSTRAINTS and getattr(c, "target", None) == ob.parent
+                           and getattr(c, "subtarget", "") == name for c in pb.constraints)):
+                return known[pb.name], False
+    bone = ob.parent.data.bones[name]
+    to_rig = rig.matrix_world.inverted() @ ob.parent.matrix_world
+    return _nearest_target(rig, plan, to_rig @ bone.head_local, to_rig @ bone.tail_local), True
+
+
+def _rest_world(ob):
+    """World matrix of a mesh parented to a bone with the armature in rest pose (its matrix_world
+    follows the current pose)."""
+    bone = ob.parent.data.bones[ob.parent_bone]
+    return (ob.parent.matrix_world @ bone.matrix_local @ Matrix.Translation((0.0, bone.length, 0.0))
+            @ ob.matrix_parent_inverse @ ob.matrix_basis)
+
+
+def _rigid_skin(ob, target, targets, arm):
+    """Skins the whole of ``ob`` to ``target`` with weight 1."""
+    for g in list(ob.vertex_groups):
+        if g.name in targets:
+            ob.vertex_groups.remove(g)
+    ob.vertex_groups.new(name=target).add(list(range(len(ob.data.vertices))), 1.0, 'REPLACE')
+    mod = ob.modifiers.new("Armature", 'ARMATURE')
+    mod.object = arm
+    if len(ob.modifiers) > 1:
+        ob.modifiers.move(len(ob.modifiers) - 1, 0)
 
 
 def _remap_weights(ob, bone_target, targets):
@@ -283,7 +394,9 @@ def _apply_modifiers(context, ob, warnings):
         m.show_viewport = True
 
 
-def _copy_mesh(context, src, rig, arm, collection, scale, warnings):
+def _copy_mesh(context, src, rig, arm, collection, scale, warnings, world=None):
+    """Copies ``src`` into the export armature's space; ``world`` replaces its world matrix (see
+    _rest_world())."""
     name = src.name
     _claim_name(name)
     me = src.data.copy()
@@ -299,7 +412,9 @@ def _copy_mesh(context, src, rig, arm, collection, scale, warnings):
         _apply_modifiers(context, ob, warnings)
         me = ob.data
     ob.parent = None
-    world = scale @ src.matrix_world
+    if world is not None:
+        ob.parent_type, ob.parent_bone = 'OBJECT', ""
+    world = scale @ (src.matrix_world if world is None else world)
     me.transform(world, shape_keys=True)
     if world.determinant() < 0.0:
         me.flip_normals()
@@ -315,9 +430,11 @@ def _copy_mesh(context, src, rig, arm, collection, scale, warnings):
     return ob
 
 
-def build(context, rig, keep_face=True, unit_scale=1.0, meshes=True):
+def build(context, rig, keep_face=True, unit_scale=1.0, meshes=True, extra_chains=False):
     """``unit_scale`` multiplies all coordinates (100 = bake metres into centimetres).
-    ``meshes=False`` builds the skeleton only, also for a rig that deforms no meshes."""
+    ``meshes=False`` builds the skeleton only, also for a rig that deforms no meshes.
+    ``extra_chains`` keeps unmapped deform chains as bones of their own (see _plan_extras())."""
+    chosen = rig
     rig = find_deform_rig(rig, context.view_layer)
     profile = mapping.detect(rig)
     if profile is None:
@@ -328,10 +445,15 @@ def build(context, rig, keep_face=True, unit_scale=1.0, meshes=True):
 
     result = Build()
     sources = find_meshes(rig, context.view_layer) if meshes else []
-    if meshes and not sources:
+    children = find_bone_children(linked_rigs(chosen, rig), rig, context.view_layer) if meshes else []
+    if meshes and not sources and not children:
         raise BuildError(f"No visible meshes deformed by '{rig.name}'")
 
     plan = _plan_skeleton(rig, keep_face, result.warnings)
+    if extra_chains:
+        extras = _plan_extras(rig, plan, profile, result.warnings)
+        plan.update(extras)
+        result.extras = list(extras)
     collection = bpy.data.collections.new(TMP_COLLECTION)
     context.scene.collection.children.link(collection)
 
@@ -342,13 +464,20 @@ def build(context, rig, keep_face=True, unit_scale=1.0, meshes=True):
     result.bone_count = len(plan)
     result.source, result.plan, result.scale = rig, plan, scale
     result.rig_matrix = rig.matrix_world.copy()
-    if not sources:
+    if not sources and not children:
         context.view_layer.update()
         return result
     bone_target = _weight_targets(rig, plan, profile.aliases, result.warnings)
     for src in sources:
         ob = _copy_mesh(context, src, rig, result.armature, collection, scale, result.warnings)
         _remap_weights(ob, bone_target, list(plan))
+        result.meshes.append(ob)
+    source_target = _source_targets(plan, profile.aliases)
+    for src in children:
+        target, _ = _bone_child_target(src, rig, plan, bone_target, source_target)
+        ob = _copy_mesh(context, src, rig, result.armature, collection, scale, result.warnings,
+                        world=_rest_world(src))
+        _rigid_skin(ob, target, list(plan), result.armature)
         result.meshes.append(ob)
     context.view_layer.update()
     return result

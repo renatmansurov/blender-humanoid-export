@@ -27,11 +27,12 @@ def _rigs(context, rig):
     return deform, anim_mod.find_animated_rig(rig, deform)
 
 
-def character(context, rig, keep_face=True):
+def character(context, rig, keep_face=True, extra_chains=False):
     """Checks for Export Character on the chosen (or resolved) armature ``rig``."""
     view_layer = context.view_layer
-    deform, anim_rig = _rigs(context, rig)
-    if mapping.detect(deform) is None:
+    deform = build_mod.find_deform_rig(rig, view_layer)
+    profile = mapping.detect(deform)
+    if profile is None:
         return [('ERROR', f"'{deform.name}' is not an Auto-Rig Pro or Rigify rig")]
     result = []
     warnings = []
@@ -43,27 +44,36 @@ def character(context, rig, keep_face=True):
     if skipped:
         result.append(('INFO', f"Not in the rig, skipped: {_names(skipped)}"))
     skip_prefixes = tuple(f"'{t}' skipped" for t in skipped)
+    extras = build_mod._plan_extras(deform, plan, profile, warnings) if extra_chains else {}
+    if extras:
+        result.append(('INFO', f"Extra bones kept: {_names(extras)}"))
     result += [('WARNING', w) for w in warnings if not w.startswith(skip_prefixes)]
 
     meshes = build_mod.find_meshes(deform, view_layer)
-    if not meshes:
+    rigs = build_mod.linked_rigs(rig, deform)
+    children = build_mod.find_bone_children(rigs, deform, view_layer)
+    if not meshes and not children:
         result.append(('ERROR', f"No visible meshes deformed by '{deform.name}'"))
     hidden = [ob.name for ob in view_layer.objects
               if ob.type == 'MESH' and not ob.get(build_mod.TMP_PROP) and ob not in meshes
               and any(m.type == 'ARMATURE' and m.object == deform for m in ob.modifiers)]
+    hidden += [ob.name for ob in build_mod.find_bone_children(rigs, deform, view_layer, visible=False)]
     if hidden:
         result.append(('INFO', f"Hidden, not exported: {_names(hidden)}"))
-    for ob in meshes:
+    for ob in meshes + children:
         dropping = build_mod.shape_key_dropping_modifiers(ob)
         if dropping:
             result.append(('WARNING', f"'{ob.name}': shape keys lost, modifiers "
                                       f"{_names(m.name for m in dropping)} are applied"))
-    rigs = {rig, deform, anim_rig}
-    parented = [ob.name for ob in view_layer.objects
-                if ob.type == 'MESH' and ob.parent in rigs and ob.parent_type == 'BONE'
-                and ob not in meshes and not ob.get(build_mod.TMP_PROP) and ob.visible_get(view_layer=view_layer)]
-    if parented:
-        result.append(('WARNING', f"Parented to a bone, not exported: {_names(parented)}"))
+    if children:
+        plan.update(extras)
+        bone_target = build_mod._weight_targets(deform, plan, profile.aliases, [])
+        source_target = build_mod._source_targets(plan, profile.aliases)
+        for ob in children:
+            target, guessed = build_mod._bone_child_target(ob, deform, plan, bone_target, source_target)
+            if guessed:
+                result.append(('INFO', f"'{ob.name}' is parented to '{ob.parent_bone}', which no deform bone "
+                                       f"follows: skinned to the nearest bone '{target}'"))
     if build_mod.has_preview():
         result.append(('INFO', "Preview is built: the source objects stay renamed until it is "
                                "cleared (✕) or the file is saved"))
@@ -82,8 +92,10 @@ def animation(context, rig, source='ACTIVE', directory=None):
         if not anim_mod.is_animated(anim_rig):
             result.append(('ERROR', f"'{anim_rig.name}' has no action or NLA strips"))
     else:
-        if not anim_mod.rig_actions(anim_rig):
+        if not anim_mod.rig_actions(anim_rig, selected=False):
             result.append(('ERROR', f"No actions animate '{anim_rig.name}'"))
+        elif not anim_mod.rig_actions(anim_rig):
+            result.append(('ERROR', f"No actions of '{anim_rig.name}' are ticked for export"))
         ad = anim_rig.animation_data
         if ad is not None and ad.use_tweak_mode:
             result.append(('ERROR', f"'{anim_rig.name}' is in NLA tweak mode; leave it first"))

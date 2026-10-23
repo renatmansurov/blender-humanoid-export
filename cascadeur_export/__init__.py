@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Renat Mansurov
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import math
 import os
 import textwrap
 
@@ -39,14 +40,22 @@ class CSC_Settings(bpy.types.PropertyGroup):
         default=True,
         description="Export jaw and eye bones; all other face bones are merged into head/jaw",
     )
+    keep_extra_chains: bpy.props.BoolProperty(
+        name="Keep Extra Chains",
+        default=False,
+        description=("Export unmapped deform bones (tail, hair, skirt, cape) as extra bones under the "
+                     "nearest mapped bone instead of merging their weights into it. Face, finger base "
+                     "and helper bones are still merged"),
+    )
     anim_source: bpy.props.EnumProperty(
         name="Animation",
         items=(
             ('ACTIVE', "Current", "What the timeline plays now, in the scene frame range"),
-            ('ALL', "All Actions", "Every action of the rig in its own frame range, one file each"),
+            ('ALL', "All Actions", "Every action ticked in the list, in its own frame range, one file each"),
         ),
         default='ACTIVE',
     )
+    anim_action_index: bpy.props.IntProperty(name="Active Action", default=-1)
     anim_dir: bpy.props.StringProperty(
         name="Folder",
         subtype='DIR_PATH',
@@ -65,6 +74,14 @@ class CSC_Settings(bpy.types.PropertyGroup):
 def _resolve_armature(context):
     settings = context.scene.csc_export
     return settings.armature or build_mod.find_source_armature(context)
+
+
+def _resolve_anim_rig(context):
+    """The armature that carries the animation for the chosen rig (see anim.find_animated_rig())."""
+    rig = _resolve_armature(context)
+    if rig is None:
+        return None
+    return anim_mod.find_animated_rig(rig, build_mod.find_deform_rig(rig, context.view_layer))
 
 
 def _resolve_filepath(context):
@@ -163,10 +180,11 @@ class CSC_OT_export_character(bpy.types.Operator):
             self.report({'ERROR'}, "Save the .blend first or set an output file")
             return {'CANCELLED'}
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        settings = context.scene.csc_export
         mode = context.mode
         try:
-            result = build_mod.build(context, rig, context.scene.csc_export.keep_face,
-                                     export_mod.centimetre_scale(context.scene))
+            result = build_mod.build(context, rig, settings.keep_face, export_mod.centimetre_scale(context.scene),
+                                     extra_chains=settings.keep_extra_chains)
             export_mod.export_fbx(context, filepath, result)
         except build_mod.BuildError as e:
             self.report({'ERROR'}, str(e))
@@ -202,14 +220,17 @@ class CSC_OT_export_animation(bpy.types.Operator):
             return {'CANCELLED'}
         clips = anim_mod.clips(context, anim_rig, settings.anim_source)
         if not clips:
-            self.report({'ERROR'}, f"No actions animate '{anim_rig.name}'")
+            if anim_mod.rig_actions(anim_rig, selected=False):
+                self.report({'ERROR'}, f"No actions of '{anim_rig.name}' are ticked for export")
+            else:
+                self.report({'ERROR'}, f"No actions animate '{anim_rig.name}'")
             return {'CANCELLED'}
         os.makedirs(directory, exist_ok=True)
         mode = context.mode
         written = []
         try:
-            result = build_mod.build(context, rig, settings.keep_face,
-                                     export_mod.centimetre_scale(context.scene), meshes=False)
+            result = build_mod.build(context, rig, settings.keep_face, export_mod.centimetre_scale(context.scene),
+                                     meshes=False, extra_chains=settings.keep_extra_chains)
             fps = settings.anim_fps or None
             for name, action, start, end in clips:
                 with anim_mod.use_action(context, anim_rig, action):
@@ -240,8 +261,9 @@ class CSC_OT_build_preview(bpy.types.Operator):
         if rig is None:
             self.report({'ERROR'}, "Select the character armature or one of its meshes")
             return {'CANCELLED'}
+        settings = context.scene.csc_export
         try:
-            result = build_mod.build(context, rig, context.scene.csc_export.keep_face)
+            result = build_mod.build(context, rig, settings.keep_face, extra_chains=settings.keep_extra_chains)
         except build_mod.BuildError as e:
             build_mod.clear(context)
             self.report({'ERROR'}, str(e))
@@ -262,6 +284,49 @@ class CSC_OT_clear_preview(bpy.types.Operator):
             bpy.ops.object.mode_set(mode='OBJECT')
         build_mod.clear(context)
         return {'FINISHED'}
+
+
+class CSC_UL_actions(bpy.types.UIList):
+    """Actions of the animated rig for All Actions, with their export checkbox and frame range."""
+    bl_idname = "CSC_UL_actions"
+
+    def draw_item(self, _context, layout, _data, item, _icon, _active_data, _active_propname, _index):
+        row = layout.row(align=True)
+        row.prop(item, "csc_export", text="")
+        row.label(text=item.name, icon='FAKE_USER_ON' if item.use_fake_user else 'ACTION')
+        start, end = item.frame_range
+        row.label(text=f"{math.floor(start)}-{math.ceil(end)}")
+
+    def filter_items(self, context, data, propname):
+        actions = getattr(data, propname)
+        rig = _resolve_anim_rig(context)
+        shown = set(anim_mod.rig_actions(rig, selected=False)) if rig is not None else set()
+        flags = [self.bitflag_filter_item if a in shown else 0 for a in actions]
+        if self.filter_name:
+            by_name = bpy.types.UI_UL_list.filter_items_by_name(
+                self.filter_name, self.bitflag_filter_item, actions, "name", reverse=self.use_filter_invert)
+            flags = [f & n for f, n in zip(flags, by_name)]
+        return flags, bpy.types.UI_UL_list.sort_items_by_name(actions, "name")
+
+
+def _draw_action_list(layout, context, settings, anim_rig):
+    """The All Actions list and the Manual Frame Range of its active action."""
+    layout.template_list(CSC_UL_actions.bl_idname, "", bpy.data, "actions", settings, "anim_action_index", rows=3)
+    if anim_rig is None:
+        return
+    shown = anim_mod.rig_actions(anim_rig, selected=False)
+    index = settings.anim_action_index
+    action = bpy.data.actions[index] if 0 <= index < len(bpy.data.actions) else None
+    if action in shown:
+        row = layout.row(align=True)
+        row.prop(action, "use_frame_range", text="Range")
+        sub = row.row(align=True)
+        sub.active = action.use_frame_range
+        sub.prop(action, "frame_start", text="")
+        sub.prop(action, "frame_end", text="")
+    ticked = sum(1 for a in shown if a.csc_export)
+    layout.label(text=f"{ticked} of {len(shown)} actions ticked", icon='CHECKBOX_HLT')
+    layout.label(text=_anim_filename("<action>", sanitize=False), icon='FILE')
 
 
 class CSC_PT_panel(bpy.types.Panel):
@@ -288,8 +353,10 @@ class CSC_PT_panel(bpy.types.Panel):
             path = _resolve_filepath(context)
             layout.label(text=bpy.path.basename(path) if path else "Save the .blend first", icon='FILE')
         layout.prop(settings, "keep_face")
+        layout.prop(settings, "keep_extra_chains")
         if selected is not None:
-            _draw_checks(layout, context, checks.safe(checks.character, context, selected, settings.keep_face))
+            _draw_checks(layout, context, checks.safe(checks.character, context, selected, settings.keep_face,
+                                                      settings.keep_extra_chains))
         layout.operator(CSC_OT_export_character.bl_idname, icon='EXPORT')
         row = layout.row(align=True)
         row.operator(CSC_OT_build_preview.bl_idname, icon='HIDE_OFF')
@@ -311,7 +378,7 @@ class CSC_PT_panel(bpy.types.Panel):
             box.label(text=f"Frames {scene.frame_start}-{scene.frame_end} at {fps:g} fps{out}, {seconds:.2f} s",
                       icon='TIME')
         else:
-            box.label(text=_anim_filename("<action>", sanitize=False), icon='FILE')
+            _draw_action_list(box, context, settings, anim_mod.find_animated_rig(selected, rig) if rig else None)
             box.label(text=f"{fps:g} fps{out}", icon='TIME')
         if selected is not None:
             _draw_checks(box, context, checks.safe(checks.animation, context, selected, settings.anim_source,
@@ -363,6 +430,7 @@ classes = (
     CSC_OT_export_animation,
     CSC_OT_build_preview,
     CSC_OT_clear_preview,
+    CSC_UL_actions,
     CSC_PT_panel,
 )
 
@@ -371,6 +439,11 @@ def register():
     for cls in classes:
         bpy.utils.register_class(cls)
     bpy.types.Scene.csc_export = bpy.props.PointerProperty(type=CSC_Settings)
+    bpy.types.Action.csc_export = bpy.props.BoolProperty(
+        name="Export",
+        default=True,
+        description="Export this action with All Actions",
+    )
     _remove_handlers()
     for handlers, fn in HANDLERS:
         handlers.append(fn)
@@ -378,6 +451,7 @@ def register():
 
 def unregister():
     _remove_handlers()
+    del bpy.types.Action.csc_export
     del bpy.types.Scene.csc_export
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)

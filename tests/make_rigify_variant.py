@@ -5,8 +5,10 @@
 
 blender -b --factory-startup --python tests/make_rigify_variant.py -- <variant> <out.blend>
 
-Variants: human, basic, human_noface, human_torso2, human_torso5, human_neck1, human_neck3 and
-combinations such as human_torso2_neck3. Then run tests/run_tests.py on the saved .blend.
+Variants: human, basic, human_noface, human_torso2, human_torso5, human_neck1, human_neck3,
+human_tail and combinations such as human_torso2_neck3. ``tail`` adds a three-bone tail off the
+hips and a two-bone hair chain off the head (extra deform chains). Then run tests/run_tests.py on
+the saved .blend.
 """
 import sys
 
@@ -41,6 +43,19 @@ def remove_bone(name):
     eb.remove(b)
 
 
+def add_chain(name, parent, points):
+    """Adds a connected chain name, name.001, ... through ``points``, parented to ``parent``."""
+    eb = meta.data.edit_bones
+    names = []
+    for i, (head, tail) in enumerate(zip(points, points[1:])):
+        b = eb.new(name if i == 0 else f"{name}.{i:03d}")
+        b.head, b.tail = head, tail
+        b.parent = eb[names[-1]] if names else eb[parent]
+        b.use_connect = bool(names)
+        names.append(b.name)
+    return names
+
+
 def subdivide(name):
     eb = meta.data.edit_bones
     for b in eb:
@@ -63,7 +78,19 @@ if "neck3" in variant:
 if "noface" in variant and "face" in meta.data.edit_bones:
     for b in [b for b in meta.data.edit_bones if b.name == "face" or "face" in [p.name for p in b.parent_recursive]]:
         meta.data.edit_bones.remove(b)
+chains = {}
+if "tail" in variant:
+    eb = meta.data.edit_bones
+    hips, head = eb["spine"], eb[[b.name for b in eb if b.name.startswith("spine")][-1]]
+    back = Vector((0.0, 1.0, 0.0))
+    start = hips.head + back * 0.1
+    chains["tail"] = add_chain("tail", "spine", [start + Vector((0.0, 0.15 * i, -0.08 * i)) for i in range(4)])
+    start = head.head + Vector((0.0, 0.08, 0.12))
+    chains["hair"] = add_chain("hair", head.name, [start + Vector((0.0, 0.06 * i, -0.1 * i)) for i in range(3)])
 bpy.ops.object.mode_set(mode='POSE')
+if chains:
+    meta.pose.bones[chains["tail"][0]].rigify_type = "spines.basic_tail"
+    meta.pose.bones[chains["hair"][0]].rigify_type = "limbs.simple_tentacle"
 if "torso2" in variant:
     meta.pose.bones["spine"].rigify_parameters.pivot_pos = 1
 print("METARIG centre:", [b.name for b in meta.data.bones if b.name.startswith("spine")])
