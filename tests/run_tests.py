@@ -11,6 +11,7 @@ import math
 import os
 import random
 import sys
+import time
 
 import bpy
 from mathutils import Matrix, Vector
@@ -18,7 +19,7 @@ from mathutils import Matrix, Vector
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
 import cascadeur_export  # noqa: E402
-from cascadeur_export import anim as A, build as B, export as E, mapping as M  # noqa: E402
+from cascadeur_export import anim as A, build as B, checks as C, export as E, mapping as M  # noqa: E402
 
 # Cascadeur's Quick Rigging Tool template the skeleton is checked against; CSC_UE4_TEMPLATE overrides it.
 UE4_TEMPLATE = os.environ.get(
@@ -76,7 +77,34 @@ def deform_weight_sums(ob, deform_names):
     return [sum(g.weight for g in v.groups if g.group in idx) for v in ob.data.vertices]
 
 
+def builtin_paths():
+    """UE4_New joint paths without the twist bones, for machines without Cascadeur (CI)."""
+    parents = {"pelvis": "root", "spine_01": "pelvis", "spine_02": "spine_01", "spine_03": "spine_02",
+               "neck_01": "spine_03", "head": "neck_01"}
+    for s in "lr":
+        parents.update({f"clavicle_{s}": "spine_03", f"upperarm_{s}": f"clavicle_{s}",
+                        f"lowerarm_{s}": f"upperarm_{s}", f"hand_{s}": f"lowerarm_{s}",
+                        f"thigh_{s}": "pelvis", f"calf_{s}": f"thigh_{s}", f"foot_{s}": f"calf_{s}",
+                        f"ball_{s}": f"foot_{s}"})
+        for f in M.FINGERS:
+            parents.update({f"{f}_01_{s}": f"hand_{s}", f"{f}_02_{s}": f"{f}_01_{s}", f"{f}_03_{s}": f"{f}_02_{s}"})
+    paths = {}
+    for joint, parent in parents.items():
+        path = []
+        while parent != "root":
+            path.insert(0, parent)
+            parent = parents[parent]
+        paths[joint] = ["root"] + path
+    # UE4_New has no slot for spine_03, it is only on the paths.
+    del paths["spine_03"]
+    return paths
+
+
 def template_paths():
+    builtin = builtin_paths()
+    if not os.path.exists(UE4_TEMPLATE):
+        print(f"  {UE4_TEMPLATE} not found, using the built-in UE4_New hierarchy")
+        return builtin
     with open(UE4_TEMPLATE, encoding="utf-8") as f:
         doc = json.load(f)
     paths = {}
@@ -86,6 +114,7 @@ def template_paths():
         for s in d["Sections"]:
             for n in s["Names"]:
                 paths[n["Joint name"]] = n.get("Joint path") or []
+    check(paths == builtin, "built-in UE4_New hierarchy matches the template")
     return paths
 
 
@@ -196,6 +225,27 @@ def synthetic_action(rig, scene):
     return action
 
 
+def baked_pose_error(result, roots, targets=None):
+    """(root location error, rotation error in degrees, largest dropped stretch) of the baked pose
+    at the current frame. The baked pose must be exactly the transfer_pose() deformation with scale
+    dropped: the rotation of every bone and the location of the root; the other bones keep rest
+    offsets."""
+    arm, src = result.armature, result.source
+    max_loc = max_rot = stretch = 0.0
+    for target in targets or result.plan:
+        sources = result.plan[target][0]
+        sb = src.data.bones[sources[0]]
+        deform = src.matrix_world @ src.pose.bones[sources[0]].matrix @ (result.rig_matrix @ sb.matrix_local).inverted()
+        loc, rot, _ = (deform @ arm.data.bones[target].matrix_local).decompose()
+        got_loc, got_rot, _ = (arm.matrix_world @ arm.pose.bones[target].matrix).decompose()
+        if target in roots:
+            max_loc = max(max_loc, (loc - got_loc).length)
+        else:
+            stretch = max(stretch, (loc - got_loc).length)
+        max_rot = max(max_rot, math.degrees(rot.rotation_difference(got_rot).angle))
+    return max_loc, max_rot, stretch
+
+
 def test_animation(ctx, rig, names_before):
     print("[animation]")
     scene = ctx.scene
@@ -230,19 +280,7 @@ def test_animation(ctx, rig, names_before):
     check(keyed == roots, f"location keyed only on the root bone(s) {sorted(keyed)}")
     for frame in sorted({start, (start + end) // 2, end}):
         scene.frame_set(frame)
-        # The baked pose must be exactly the transfer_pose() deformation with scale dropped: the
-        # rotation of every bone and the location of the root; the other bones keep rest offsets.
-        max_loc = max_rot = stretch = 0.0
-        for target, (sources, _) in result.plan.items():
-            sb = src.data.bones[sources[0]]
-            deform = src.matrix_world @ src.pose.bones[sources[0]].matrix @ (result.rig_matrix @ sb.matrix_local).inverted()
-            loc, rot, _ = (deform @ arm.data.bones[target].matrix_local).decompose()
-            got_loc, got_rot, _ = (arm.matrix_world @ arm.pose.bones[target].matrix).decompose()
-            if target in roots:
-                max_loc = max(max_loc, (loc - got_loc).length)
-            else:
-                stretch = max(stretch, (loc - got_loc).length)
-            max_rot = max(max_rot, math.degrees(rot.rotation_difference(got_rot).angle))
+        max_loc, max_rot, stretch = baked_pose_error(result, roots)
         check(max_loc < 1e-4 and max_rot < 0.01,
               f"frame {frame}: baked pose = rig deformation (root max {max_loc*100:.4f} cm, {max_rot:.4f} deg)")
         # Merged bones lose some detail (see [pose comparison]); real animation is gated, a random
@@ -275,6 +313,8 @@ def test_animation(ctx, rig, names_before):
     check(max_dev < 1e-4, f"resampled keys match scene-frame keys (max {max_dev:.2e})")
     B.clear(ctx)
     check(not any(a.get(B.TMP_PROP) for a in bpy.data.actions), "baked actions removed by clear")
+
+    decoy = test_action_selection(ctx, anim_rig)
 
     character = fbx_anim_summary(ctx.scene.csc_export.filepath)
     settings = ctx.scene.csc_export
@@ -327,6 +367,168 @@ def test_animation(ctx, rig, names_before):
                 abs(a - b) > 1e-3 for x, y in zip(info["lcl"][n], character["lcl"][n]) for a, b in zip(x, y))]
             check(not lcl_diff, f"{mode}: default transforms = character rest pose {sorted(lcl_diff)[:5]}")
             check(info["moving"] <= {"pelvis"}, f"{mode}: only pelvis translation animated {sorted(info['moving'])[:5]}")
+        if mode == 'ALL':
+            check(decoy.name not in [c[0] for c in clips]
+                  and not os.path.exists(os.path.join(OUT_DIR, cascadeur_export._anim_filename(decoy.name))),
+                  "ALL: unticked action not exported")
+    bpy.data.actions.remove(decoy)
+
+
+def test_action_selection(ctx, anim_rig):
+    """Which actions All Actions exports. Returns an unticked copy of the rig's action, left in the
+    file for the export test; the other test data is removed."""
+    print("[action selection]")
+    real = anim_state(anim_rig)[0]
+    decoy = real.copy()
+    decoy.name = "csc_test_unticked"
+    decoy.csc_export = False
+    foreign = real.copy()
+    foreign.name = "csc_test_foreign"
+    other = bpy.data.objects.new("csc_test_other", bpy.data.armatures.new("csc_test_other"))
+    ctx.scene.collection.objects.link(other)
+    other.animation_data_create().action = foreign
+    if hasattr(other.animation_data, "action_slot") and foreign.slots:
+        other.animation_data.action_slot = foreign.slots[0]
+    candidates = A.rig_actions(anim_rig, selected=False)
+    check(real in candidates and decoy in candidates, "rig's action and an unassigned copy are listed")
+    check(foreign not in candidates, "action played by another armature is not listed")
+    check(decoy not in A.rig_actions(anim_rig), "unticked action is not exported")
+    if hasattr(real, "slots"):
+        slot = A.rig_slot(real, anim_rig)
+        check(slot is not None and slot == anim_rig.animation_data.action_slot,
+              f"slot of the rig's action found ({slot.identifier if slot else None})")
+    data = other.data
+    remove_object(ctx, other)
+    bpy.data.armatures.remove(data)
+    bpy.data.actions.remove(foreign)
+
+    decoy.csc_export = True
+    decoy.use_frame_range, decoy.frame_start, decoy.frame_end = True, 2, 7
+    clip = next((c for c in A.clips(ctx, anim_rig, 'ALL') if c[1] == decoy), None)
+    check(clip is not None and clip[2:] == (2, 7), f"manual frame range used for the clip ({clip and clip[2:]})")
+    saved = {a: a.csc_export for a in candidates}
+    for a in candidates:
+        a.csc_export = False
+    found = C.animation(ctx, anim_rig, 'ALL', OUT_DIR)
+    check(any(level == 'ERROR' and "ticked" in text for level, text in found), "nothing ticked reported")
+    for a, value in saved.items():
+        a.csc_export = value
+    decoy.csc_export = False
+    return decoy
+
+
+def saved_object_names(path):
+    with bpy.data.libraries.load(path) as (data_from, _data_to):
+        return list(data_from.objects), list(data_from.collections)
+
+
+def test_save(ctx, rig, names_before):
+    """Saving with the preview built must write the source names; returns a file saved without
+    the add-on's save handler, for test_load_repair()."""
+    print("[save]")
+    result = B.build(ctx, rig, keep_face=True)
+    ctx.view_layer.objects.active = result.armature
+    bpy.ops.object.mode_set(mode='POSE')
+    path = os.path.join(OUT_DIR, "save_test.blend")
+    bpy.ops.wm.save_as_mainfile(filepath=path, copy=True)
+    check(not B.has_preview(), "preview removed before saving (from pose mode)")
+    check(sorted(o.name for o in bpy.data.objects) == names_before, "object names restored by saving")
+    objects, collections = saved_object_names(path)
+    # Objects without users are not written, so the saved names are a subset.
+    check(set(objects) <= set(names_before) and B.TMP_COLLECTION not in collections,
+          f"saved file has the source names and no preview ({sorted(set(objects) - set(names_before))[:5]})")
+    ctx.view_layer.objects.active = rig
+
+    B.build(ctx, rig, keep_face=True)
+    bpy.app.handlers.save_pre.remove(cascadeur_export._on_save_pre)
+    broken = os.path.join(OUT_DIR, "broken_preview.blend")
+    try:
+        bpy.ops.wm.save_as_mainfile(filepath=broken, copy=True)
+    finally:
+        bpy.app.handlers.save_pre.append(cascadeur_export._on_save_pre)
+    B.clear(ctx)
+    ctx.view_layer.objects.active = rig
+    objects, _ = saved_object_names(broken)
+    check(any(n.endswith("__csc_src") for n in objects), "without the handler the file keeps renamed objects")
+    return broken
+
+
+def remove_object(ctx, ob):
+    # Without the sync the view layer still lists the removed object (as None).
+    bpy.data.objects.remove(ob)
+    ctx.view_layer.update()
+
+
+def test_checks(ctx, rig, names_before):
+    print("[checks]")
+    start = time.perf_counter()
+    items = C.character(ctx, rig, True) + C.animation(ctx, rig, 'ACTIVE', OUT_DIR) + C.animation(ctx, rig, 'ALL', OUT_DIR)
+    print(f"  took {(time.perf_counter() - start) * 1000:.1f} ms")
+    for level, text in items:
+        print(f"  {level.lower()}: {text}")
+    check(not any(level == 'ERROR' for level, _ in items), "no check errors on the test character")
+    check(any(level == 'ERROR' for level, _ in C.animation(ctx, rig, 'ACTIVE', None)), "missing folder reported")
+
+    def reported(level, *words):
+        found = C.character(ctx, rig, True)
+        return any(lv == level and all(w in t for w in words) for lv, t in found)
+
+    me = bpy.data.meshes.new("csc_test_prop")
+    prop = bpy.data.objects.new("csc_test_prop", me)
+    ctx.scene.collection.objects.link(prop)
+    prop.parent, prop.parent_type, prop.parent_bone = rig, 'BONE', rig.data.bones[0].name
+    check(not reported('WARNING', "csc_test_prop"), "mesh parented to a bone: no warning, it is exported")
+    remove_object(ctx, prop)
+    bpy.data.meshes.remove(me)
+
+    me = bpy.data.meshes.new("csc_test_keys")
+    me.from_pydata([(0, 0, 0), (0.1, 0, 0), (0, 0.1, 0)], [], [(0, 1, 2)])
+    ob = bpy.data.objects.new("csc_test_keys", me)
+    ctx.scene.collection.objects.link(ob)
+    ob.shape_key_add(name="Basis")
+    ob.shape_key_add(name="Key")
+    ob.modifiers.new("Armature", 'ARMATURE').object = rig
+    ob.modifiers.new("Subdivision", 'SUBSURF')
+    check(reported('WARNING', "csc_test_keys", "shape keys"), "shape keys dropped by a modifier reported")
+    ob.modifiers.remove(ob.modifiers["Subdivision"])
+    ob.modifiers.new("Weighted Normal", 'WEIGHTED_NORMAL')
+    check(not reported('WARNING', "csc_test_keys"), "normal-only modifier keeps shape keys, no warning")
+    ob.hide_set(True)
+    check(reported('INFO', "Hidden", "csc_test_keys"), "hidden bound mesh reported")
+    remove_object(ctx, ob)
+    bpy.data.meshes.remove(me)
+
+    empty = bpy.data.objects.new("csc_test_empty", None)
+    ctx.scene.collection.objects.link(empty)
+    empty.keyframe_insert("location", frame=1)
+    check(A.object_transform_animated(empty), "object-level animation detected")
+    action = empty.animation_data.action
+    remove_object(ctx, empty)
+    bpy.data.actions.remove(action)
+
+    arm = bpy.data.objects.new("csc_test_arm", bpy.data.armatures.new("csc_test_arm"))
+    ctx.scene.collection.objects.link(arm)
+    ctx.view_layer.update()  # creates arm.pose
+    check(C.character(ctx, arm, True)[0][0] == 'ERROR', "unsupported rig reported")
+    data = arm.data
+    remove_object(ctx, arm)
+    bpy.data.armatures.remove(data)
+
+    B.build(ctx, rig, keep_face=True)
+    check(reported('INFO', "Preview is built"), "built preview reported")
+    B.clear(ctx)
+    ctx.view_layer.objects.active = rig
+    check(sorted(o.name for o in bpy.data.objects) == names_before, "checks: object names restored")
+
+
+def test_load_repair(path, names_before, mesh_names):
+    """Opens a file saved with the preview (replaces the session, so it runs last)."""
+    print("[load repair]")
+    bpy.ops.wm.open_mainfile(filepath=path)
+    names = {o.name for o in bpy.data.objects}
+    check(not B.has_preview(), "leftover preview removed on load")
+    check(names <= set(names_before) and set(mesh_names) <= names,
+          f"source names restored on load ({sorted(names - set(names_before))[:5]})")
 
 
 def main():
@@ -373,8 +575,9 @@ def main():
     if "jaw" in plan and all(n in bone_target for n in face):
         got = {n: bone_target[n] for n in face}
         check(got == face, f"face weights go to jaw/head {got}")
+    # Extra chains (a tail) are merged into pelvis on purpose unless Keep Extra Chains is on.
     lost = [n for n, t in bone_target.items() if t == "pelvis" and n not in plan["pelvis"][0]
-            and not n.startswith(("DEF-pelvis", "c_root"))]
+            and not n.startswith(("DEF-pelvis", "c_root")) and profile.merged(rig.data.bones[n])]
     check(len(lost) <= 2, f"deform bones merged into pelvis look intended ({lost[:6]})")
 
     targets = {b.name for b in arm.data.bones}
@@ -436,7 +639,44 @@ def main():
             if ob.name.lower().startswith("body"):
                 check(mean < 0.01, f"frame {frame} {ob.name}: mean deviation < 1 cm")
 
+    synthetic_pose(ctx, rig, result, srcs)
+
+    print("[clear]")
+    B.clear(ctx)
+    check(sorted(o.name for o in bpy.data.objects) == names_before, "object names restored after clear")
+    check(B.TMP_COLLECTION not in bpy.data.collections, "temp collection removed")
+
+    broken = test_save(ctx, rig, names_before)
+
+    print("[export]")
+    ctx.view_layer.objects.active = rig
+    ctx.scene.csc_export.filepath = os.path.join(OUT_DIR, "operator_export.fbx")
+    check(bpy.ops.cascadeur.export_character() == {'FINISHED'}, "operator export finished")
+    check(ctx.view_layer.objects.active == rig, "active object restored")
+    check(sorted(o.name for o in bpy.data.objects) == names_before, "object names restored after export")
+    info = fbx_summary(ctx.scene.csc_export.filepath)
+    print(f"  {info}")
+    check(abs(info["unit"][0] - 1.0) < 1e-6, "FBX unit is centimetres")
+    check("Lcl Scaling" not in info["root"], "root node has no scaling")
+    body_top = max(g[3] for g in info["geom"])
+    check(150 < body_top < 250, f"character height in cm ({body_top})")
+
+    test_animation(ctx, rig, names_before)
+    test_bone_children(ctx, rig, names_before)
+    test_extra_chains(ctx, rig, names_before, orig)
+    test_checks(ctx, rig, names_before)
+    test_load_repair(broken, names_before, [m.name for m in meshes])
+
+    print("\nRESULT:", "PASS" if not failures else f"{len(failures)} FAILURE(S)")
+    for f in failures:
+        print("  -", f)
+
+
+def synthetic_pose(ctx, rig, result, srcs, label="posed"):
+    """Poses the rig, transfers the pose onto the build's skeleton and gates the mesh deviation."""
     print("[synthetic pose]")
+    profile = M.detect(rig)
+    arm, plan = result.armature, result.plan
     # The scene animation may be in rest pose, so the rig is posed here. A generated Rigify rig
     # hangs many DEF- bones off ORG-/MCH- bones, so it is posed through its controls with the
     # constraints on; merged twist segments then deviate a little, which the looser limit allows.
@@ -474,7 +714,7 @@ def main():
         moved = max((x - y).length for x, y in zip(a, world_coords(src)))
         print(f"  {ob.name}: moved up to {moved*100:.1f} cm; deviation mean {mean*100:.3f} cm, max {max(d)*100:.3f} cm")
         if chained:
-            check(mean < limit, f"posed {ob.name}: mean deviation < {limit * 1000:.0f} mm")
+            check(mean < limit, f"{label} {ob.name}: mean deviation < {limit * 1000:.0f} mm")
     for pb in rig.pose.bones:
         pb.rotation_mode, pb.matrix_basis = saved[pb.name]
     for c in muted:
@@ -483,29 +723,155 @@ def main():
         pb.matrix_basis = Matrix.Identity(4)
     ctx.view_layer.update()
 
-    print("[clear]")
+
+def cube(ctx, name, size=0.03):
+    me = bpy.data.meshes.new(name)
+    s = size / 2
+    me.from_pydata([(x, y, z) for x in (-s, s) for y in (-s, s) for z in (-s, s)], [],
+                   [(0, 1, 3, 2), (4, 6, 7, 5), (0, 4, 5, 1), (2, 3, 7, 6), (0, 2, 6, 4), (1, 5, 7, 3)])
+    ob = bpy.data.objects.new(name, me)
+    ctx.scene.collection.objects.link(ob)
+    return ob
+
+
+def test_bone_children(ctx, rig, names_before):
+    """Meshes parented to a bone are exported skinned rigidly to the bone they follow."""
+    print("[bone children]")
+    scene = ctx.scene
+    plan = B._plan_skeleton(rig, True, [])
+    parents = [(plan["hand_l"][0][0], "hand_l")]
+    # A control the head follows: ARP's c_head.x is the parent of head.x, Rigify's head is copied
+    # by ORG-spine.006 (DEF-spine.006 copies that one).
+    control = next((n for n in ("c_head.x", "head") if n in rig.data.bones and not rig.data.bones[n].use_deform), None)
+    if control:
+        parents.append((control, "head"))
+    props = []
+    for i, (bone, target) in enumerate(parents):
+        ob = cube(ctx, f"csc_test_child_{i}")
+        ob.parent, ob.parent_type, ob.parent_bone = rig, 'BONE', bone
+        ob.location = (0.02, -0.01, 0.03)
+        props.append((ob, target))
+    frame = (scene.frame_start + scene.frame_end) // 2
+    scene.frame_set(frame)
+    rig.data.pose_position = 'REST'
+    ctx.view_layer.update()
+    rest = {ob.name: world_coords(ob) for ob, _ in props}
+    rig.data.pose_position = 'POSE'
+    ctx.view_layer.update()
+    found = C.character(ctx, rig, True)
+    check(not any(ob.name in text for ob, _ in props for _, text in found),
+          f"bone children: no check messages ({[t for _, t in found if 'csc_test_child' in t][:2]})")
+
+    result = B.build(ctx, rig, keep_face=True)
+    arm = result.armature
+    for src, target in props:
+        copy = next((m for m in result.meshes if m.name == src[B.ORIGINAL_NAME_PROP]), None)
+        if copy is None:
+            check(False, f"{src.name} ({src.parent_bone}) exported")
+            continue
+        groups = [g.name for g in copy.vertex_groups]
+        weights = {round(ge.weight, 6) for v in copy.data.vertices for ge in v.groups}
+        check(groups == [target] and weights == {1.0},
+              f"{src.parent_bone}: skinned to {groups} with weights {sorted(weights)} (expected {target}, 1)")
+        mod = copy.modifiers[0] if copy.modifiers else None
+        check(mod is not None and mod.type == 'ARMATURE' and mod.object == arm and copy.parent == arm,
+              f"{src.parent_bone}: bound to the export armature")
+        dev = max((a - b).length for a, b in zip(rest[copy.name], world_coords(copy)))
+        check(dev < 1e-5, f"{src.parent_bone}: rest position preserved (max {dev:.2e})")
+        # The mesh must move exactly like the target's source bone deforms its skin, which is what
+        # weight 1 on the target transfers (transfer_pose() itself is not exact on stretched limbs).
+        sb = rig.data.bones[result.plan[target][0][0]]
+        deform = (rig.matrix_world @ rig.pose.bones[sb.name].matrix @ sb.matrix_local.inverted()
+                  @ rig.matrix_world.inverted())
+        a = world_coords(src, evaluated=True)
+        dev = max((x - deform @ y).length for x, y in zip(a, rest[copy.name]))
+        moved = max((x - y).length for x, y in zip(a, rest[copy.name]))
+        check(dev < 1e-4, f"{src.parent_bone}: moves with {sb.name} at frame {frame} "
+                          f"(moved {moved*100:.1f} cm, deviation {dev*1000:.3f} mm)")
     B.clear(ctx)
-    check(sorted(o.name for o in bpy.data.objects) == names_before, "object names restored after clear")
-    check(B.TMP_COLLECTION not in bpy.data.collections, "temp collection removed")
-
-    print("[export]")
+    for ob, _ in props:
+        me = ob.data
+        remove_object(ctx, ob)
+        bpy.data.meshes.remove(me)
     ctx.view_layer.objects.active = rig
-    ctx.scene.csc_export.filepath = os.path.join(OUT_DIR, "operator_export.fbx")
-    check(bpy.ops.cascadeur.export_character() == {'FINISHED'}, "operator export finished")
-    check(ctx.view_layer.objects.active == rig, "active object restored")
-    check(sorted(o.name for o in bpy.data.objects) == names_before, "object names restored after export")
-    info = fbx_summary(ctx.scene.csc_export.filepath)
-    print(f"  {info}")
-    check(abs(info["unit"][0] - 1.0) < 1e-6, "FBX unit is centimetres")
-    check("Lcl Scaling" not in info["root"], "root node has no scaling")
-    body_top = max(g[3] for g in info["geom"])
-    check(150 < body_top < 250, f"character height in cm ({body_top})")
+    check(sorted(o.name for o in bpy.data.objects) == names_before, "bone children: object names restored")
 
-    test_animation(ctx, rig, names_before)
 
-    print("\nRESULT:", "PASS" if not failures else f"{len(failures)} FAILURE(S)")
-    for f in failures:
-        print("  -", f)
+def test_extra_chains(ctx, rig, names_before, orig):
+    """Keep Extra Chains: unmapped deform bones as extra bones, in the build, the bake and the FBX."""
+    print("[extra chains]")
+    profile = M.detect(rig)
+    scene = ctx.scene
+    plan = B._plan_skeleton(rig, True, [])
+    result = B.build(ctx, rig, keep_face=True, extra_chains=True)
+    arm, extras = result.armature, result.extras
+    print(f"  {len(extras)} extra bone(s): {extras[:10]}")
+    for w in result.warnings:
+        print("  warn", w)
+    check(len(arm.data.bones) == len(plan) + len(extras), f"{len(plan)} + {len(extras)} extra bones ({len(arm.data.bones)})")
+    merged = [t for t in extras if profile.merged(rig.data.bones[result.plan[t][0][0]])]
+    check(not merged, f"no face, palm or helper bones among the extras {merged[:5]}")
+    moved = [t for t, (_, parent) in plan.items()
+             if (arm.data.bones[t].parent.name if arm.data.bones[t].parent else None) != parent]
+    check(not moved, f"mapped bones keep their parents {moved[:5]}")
+    orphans = [t for t in extras if arm.data.bones[t].parent is None]
+    check(not orphans, f"every extra bone has a parent {orphans[:5]}")
+    if rig.data.get("rig_id") is not None and "DEF-tail" in rig.data.bones:
+        # tests/make_rigify_variant.py human_tail
+        expected = {"DEF-tail": "pelvis", "DEF-tail.001": "DEF-tail", "DEF-tail.002": "DEF-tail.001",
+                    "DEF-hair": "head", "DEF-hair.001": "DEF-hair"}
+        got = {t: arm.data.bones[t].parent.name for t in expected if t in arm.data.bones}
+        check(got == expected, f"tail and hair chains under pelvis and head {got}")
+    targets = {b.name for b in arm.data.bones}
+    for ob in result.meshes:
+        _, sums = orig[ob.name]
+        new_sums = deform_weight_sums(ob, targets)
+        max_w = max(abs(b - (1.0 if a > 1.0 and abs(b - 1.0) < 1e-4 else a)) for a, b in zip(sums, new_sums))
+        check(max_w < 1e-4, f"extras: {ob.name} weight sums preserved (max {max_w:.2e})")
+    weighted = {g.name for ob in result.meshes for g in ob.vertex_groups}
+    unweighted = [t for t in extras if t not in weighted]
+    print(f"  extras without weights: {unweighted[:5]}")
+    srcs = {m[B.ORIGINAL_NAME_PROP]: m for m in bpy.data.objects
+            if m.get(B.ORIGINAL_NAME_PROP) and not m.get(B.TMP_PROP)}
+    synthetic_pose(ctx, rig, result, srcs, label="extras posed")
+
+    anim_rig = A.find_animated_rig(rig, rig)
+    start, end = scene.frame_start, scene.frame_end
+    with A.use_action(ctx, anim_rig, None):
+        A.bake(ctx, result, start, end, "bake_extra")
+    roots = {t for t, (_, parent) in result.plan.items() if parent is None}
+    if extras:
+        for frame in sorted({start, end}):
+            scene.frame_set(frame)
+            _, max_rot, _ = baked_pose_error(result, roots, extras)
+            check(max_rot < 0.01, f"frame {frame}: extra bones baked with the rig's rotation ({max_rot:.4f} deg)")
+    B.clear(ctx)
+
+    settings = scene.csc_export
+    saved = settings.keep_extra_chains, settings.filepath, settings.anim_dir, settings.anim_source, settings.anim_fps
+    out = os.path.join(OUT_DIR, "extra")
+    os.makedirs(out, exist_ok=True)
+    settings.keep_extra_chains = True
+    settings.filepath = os.path.join(out, "extra_export.fbx")
+    settings.anim_dir, settings.anim_source, settings.anim_fps = out, 'ACTIVE', 0
+    ctx.view_layer.objects.active = rig
+    try:
+        check(bpy.ops.cascadeur.export_character() == {'FINISHED'}, "extras: character export finished")
+        clip = os.path.join(out, cascadeur_export._anim_filename(A.active_clip_name(anim_rig)))
+        check(bpy.ops.cascadeur.export_animation() == {'FINISHED'}, "extras: animation export finished")
+        character = fbx_anim_summary(settings.filepath)
+        info = fbx_anim_summary(clip)
+        bones = set(info["parents"]) - {"root", E.BIND_POSE_MESH}
+        check(set(extras) <= set(character["parents"]) and set(extras) <= bones,
+              "extras: extra bones in the character and the clip FBX")
+        diff = {n for n in bones if info["parents"][n] != character["parents"].get(n)}
+        check(not diff, f"extras: clip hierarchy matches the character FBX {sorted(diff)[:5]}")
+        check(info["moving"] <= {"pelvis"}, f"extras: only pelvis translation animated {sorted(info['moving'])[:5]}")
+        check(not (bones - info["bind_pose"]), "extras: bind pose covers every bone")
+    finally:
+        (settings.keep_extra_chains, settings.filepath, settings.anim_dir, settings.anim_source,
+         settings.anim_fps) = saved
+    check(sorted(o.name for o in bpy.data.objects) == names_before, "extras: object names restored")
 
 
 main()

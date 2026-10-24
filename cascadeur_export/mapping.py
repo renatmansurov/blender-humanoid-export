@@ -8,6 +8,7 @@ template ``UE4_New.qrigcasc`` (paths start at ``root``, which is the armature
 object itself), so the template recognises the exported skeleton as is.
 """
 
+import re
 from collections import namedtuple
 
 ROOT_NAME = "root"
@@ -36,7 +37,9 @@ def _spread_torso(torso):
 # reversed: targets built tail-to-head.
 # aliases(source) -> other bone names that stand for ``source`` when deform bones look for a
 # mapped ancestor to give their weights to.
-Profile = namedtuple("Profile", "name signature entries reversed aliases")
+# merged(bone) -> whether an unmapped deform bone is always merged into its ancestor, even when
+# extra deform chains are kept (face, finger bases, helper bones).
+Profile = namedtuple("Profile", "name signature entries reversed aliases merged")
 
 
 # --- Auto-Rig Pro ---------------------------------------------------------------------------
@@ -99,10 +102,21 @@ def _arp_entries(rig, keep_face=True):
     return result + _arp_side("l") + _arp_side("r")
 
 
+# ARP facial module bones; with Keep Jaw & Eyes only jaw and eyes are kept, the rest is merged.
+ARP_FACE = ("c_lips_", "c_eye", "c_nose_", "c_chin_", "c_cheek_", "c_teeth_", "tong_", "c_tong_",
+            "c_ear_", "c_bingl", "c_jaw", "jawbone")
+
+
+def _arp_merged(bone):
+    # Finger *_base bones belong to the hand; extra twist and *_bend bones are segment helpers.
+    name = bone.name
+    return name.startswith(ARP_FACE) or "_base." in name or "twist" in name or "_bend" in name
+
+
 # ARP's c_root_bend.x starts at the spine base and points down to the hips; reversed, the pelvis
 # joint sits at hip level below spine_01 instead of on top of it, which Cascadeur needs to get a
 # defined pelvis direction.
-ARP = Profile("Auto-Rig Pro", ARP_SIGNATURE, _arp_entries, {"pelvis"}, lambda source: ())
+ARP = Profile("Auto-Rig Pro", ARP_SIGNATURE, _arp_entries, {"pelvis"}, lambda source: (), _arp_merged)
 
 
 # --- Rigify ---------------------------------------------------------------------------------
@@ -239,7 +253,23 @@ def _rigify_aliases(source):
     return ("ORG-" + source[4:],) if source.startswith("DEF-") else ()
 
 
-RIGIFY = Profile("Rigify", RIGIFY_SIGNATURE, _rigify_entries, set(), _rigify_aliases)
+# First word of Rigify face bone names (DEF-lip.T.L, DEF-brow.B.L, DEF-jaw_master, ...).
+RIGIFY_FACE = {"face", "forehead", "temple", "brow", "lid", "ear", "lip", "lips", "chin", "jaw", "tongue",
+               "cheek", "nose", "nostril", "teeth", "eye", "eyes"}
+
+
+def _rigify_merged(bone):
+    # Palm bones belong to the hand, DEF-pelvis.L/R to the hips. Face bones are recognised by name
+    # and, in a generated rig, by hanging off ORG-face.
+    name = bone.name
+    if name.startswith(("DEF-palm", "DEF-pelvis")):
+        return True
+    if name.startswith("DEF-") and re.split(r"[._]", name[4:])[0].lower() in RIGIFY_FACE:
+        return True
+    return any(p.name in ("ORG-face", "face") for p in bone.parent_recursive)
+
+
+RIGIFY = Profile("Rigify", RIGIFY_SIGNATURE, _rigify_entries, set(), _rigify_aliases, _rigify_merged)
 
 PROFILES = (ARP, RIGIFY)
 

@@ -22,13 +22,17 @@ from . import build as build_mod
 STRETCH_TOLERANCE = 0.005
 
 
-def is_animated(ob):
-    """Whether the active action or an NLA strip of ``ob`` animates its bones."""
+def _played_actions(ob):
+    """The active action and the NLA strip actions of ``ob``."""
     ad = ob.animation_data
     if ad is None:
-        return False
-    actions = [ad.action] + [s.action for t in ad.nla_tracks for s in t.strips]
-    return any(a is not None and animates_bones(a, ob) for a in actions)
+        return []
+    return [a for a in [ad.action] + [s.action for t in ad.nla_tracks for s in t.strips] if a is not None]
+
+
+def is_animated(ob):
+    """Whether the active action or an NLA strip of ``ob`` animates its bones."""
+    return any(animates_bones(a, ob) for a in _played_actions(ob))
 
 
 def find_animated_rig(rig, deform_rig):
@@ -47,17 +51,18 @@ def find_animated_rig(rig, deform_rig):
     return max(counts, key=counts.get) if counts else rig
 
 
-def _fcurves(action):
+def _fcurves(action, slot=None):
+    """F-curves of ``action``; with ``slot`` (Blender 4.4+) only those of that slot."""
     layers = getattr(action, "layers", None)
     if layers:
-        return [fc for layer in layers for strip in layer.strips
-                for bag in strip.channelbags for fc in bag.fcurves]
+        return [fc for layer in layers for strip in layer.strips for bag in strip.channelbags
+                if slot is None or getattr(bag, "slot", slot) == slot for fc in bag.fcurves]
     # Blender before 4.4 (legacy actions).
     return list(getattr(action, "fcurves", ()))
 
 
-def animates_bones(action, rig):
-    for fc in _fcurves(action):
+def animates_bones(action, rig, slot=None):
+    for fc in _fcurves(action, slot):
         if not fc.data_path.startswith("pose.bones[") or not fc.keyframe_points:
             continue
         try:
@@ -68,9 +73,64 @@ def animates_bones(action, rig):
     return False
 
 
-def rig_actions(rig):
-    """Actions that animate bones of ``rig``."""
-    return [a for a in bpy.data.actions if not a.get(build_mod.TMP_PROP) and animates_bones(a, rig)]
+OBJECT_TRANSFORMS = ("location", "rotation_euler", "rotation_quaternion", "rotation_axis_angle", "scale")
+
+
+def object_transform_animated(ob):
+    """Whether the active action or an NLA strip of ``ob`` keys its object transform (not its bones)."""
+    return any(fc.data_path in OBJECT_TRANSFORMS and fc.keyframe_points
+               for a in _played_actions(ob) for fc in _fcurves(a))
+
+
+def _players():
+    """{action: [(slot handle or None, armature object)]}: who plays which action and slot, as the
+    active action or an NLA strip. ActionSlot.users() is not used: it can crash Blender 5.2."""
+    players = {}
+    for ob in bpy.data.objects:
+        ad = ob.animation_data if ob.type == 'ARMATURE' else None
+        if ad is None:
+            continue
+        uses = [ad] + [s for t in ad.nla_tracks for s in t.strips]
+        for use in uses:
+            if use.action is not None:
+                slot = getattr(use, "action_slot", None)
+                players.setdefault(use.action, []).append((slot.handle if slot else None, ob))
+    return players
+
+
+def rig_slot(action, rig, players=None):
+    """The slot of ``action`` (Blender 4.4+) that animates the bones of ``rig``: one ``rig`` plays,
+    otherwise one no armature plays. Slots played only by other armatures (another character with
+    the same bone names) are skipped. None if there is no such slot or the action has no slots."""
+    uses = (_players() if players is None else players).get(action, [])
+    free = None
+    for slot in getattr(action, "slots", ()):
+        if not animates_bones(action, rig, slot):
+            continue
+        users = {ob for handle, ob in uses if handle == slot.handle}
+        if rig in users:
+            return slot
+        if not users and free is None:
+            free = slot
+    return free
+
+
+def _animates_rig(action, rig, players):
+    """Whether ``action`` animates the bones of ``rig`` and is not another armature's: by its slots
+    in Blender 4.4+, otherwise by which armatures play it (see _players())."""
+    if len(getattr(action, "slots", ())):
+        return rig_slot(action, rig, players) is not None
+    users = {ob for _, ob in players.get(action, [])}
+    return (not users or rig in users) and animates_bones(action, rig)
+
+
+def rig_actions(rig, selected=True):
+    """Actions that animate bones of ``rig`` and do not belong to another armature;
+    ``selected`` keeps only those ticked for export (Action.csc_export)."""
+    players = _players()
+    return [a for a in bpy.data.actions
+            if not a.get(build_mod.TMP_PROP) and (not selected or getattr(a, "csc_export", True))
+            and _animates_rig(a, rig, players)]
 
 
 def safe_name(name):
@@ -110,10 +170,14 @@ def use_action(context, rig, action):
         saved = ad.action, getattr(ad, "action_slot", None), ad.use_nla
         ad.use_nla = False
         ad.action = action
-        if hasattr(ad, "action_slot") and ad.action_slot is None:
-            slots = list(ad.action_suitable_slots) or list(action.slots)
-            if slots:
-                ad.action_slot = slots[0]
+        if hasattr(ad, "action_slot"):
+            slot = rig_slot(action, rig)
+            if slot is not None:
+                ad.action_slot = slot
+            elif ad.action_slot is None:
+                slots = list(ad.action_suitable_slots) or list(action.slots)
+                if slots:
+                    ad.action_slot = slots[0]
     try:
         yield
     finally:

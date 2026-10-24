@@ -8,11 +8,13 @@ cascadeur_export/        The add-on itself (a Blender extension). Everything in 
   __init__.py            UI panel, properties, operators, register/unregister.
   mapping.py             Auto-Rig Pro / Rigify deform bones -> UE4 Mannequin skeleton.
   build.py               Builds the temporary export skeleton and skinned mesh copies.
+  checks.py              Pre-export checks shown in the panel.
   anim.py                Bakes the rig's animation onto the export skeleton.
   export.py              FBX export settings and calls.
 tests/                   Headless test scripts (run inside Blender).
   run_tests.py           Checks a character .blend end to end.
   make_rigify_variant.py Generates Rigify test characters.
+  run_rigify_variants.sh Generates every Rigify variant and runs the tests on it (used by CI).
   in/, out/              Local test characters and results. Not tracked by git.
 docs/ru/                 Russian translation of the documentation.
 .github/workflows/       CI: validates and builds the extension, publishes releases.
@@ -51,7 +53,8 @@ blender -b <character.blend> --factory-startup --python-exit-code 1 --python tes
 - `out_dir` defaults to `tests/out/`.
 - The skeleton is checked against Cascadeur's `UE4_New.qrigcasc` Quick Rigging Tool template.
   The default path is the standard Cascadeur install on Windows; set `CSC_UE4_TEMPLATE` to use
-  another location.
+  another location. Without the template a built-in copy of its hierarchy is used; with it, the
+  built-in copy is checked against the template.
 - The script prints `RESULT: PASS` or the list of failures, and exits with code 1 on failure.
 
 Rigify test characters can be generated without any external assets:
@@ -61,7 +64,20 @@ blender -b --factory-startup --python tests/make_rigify_variant.py -- <variant> 
 ```
 
 Variants: `human`, `basic`, `human_noface`, `human_torso2`, `human_torso5`, `human_neck1`,
-`human_neck3` and combinations such as `human_torso2_neck3`.
+`human_neck3`, `human_tail` and combinations such as `human_torso2_neck3`. `tail` adds a
+three-bone tail off the hips and a two-bone hair chain off the head, for **Keep Extra Chains**.
+
+To generate all of them and run the tests on each (Git Bash on Windows works):
+
+```
+bash tests/run_rigify_variants.sh <blender> [out_dir] [variant ...]
+```
+
+It prints one `RESULT` line per variant and exits with code 1 if any fails. CI (`.github/workflows/build.yml`)
+runs it on every push and pull request in the oldest supported Blender (4.2) and the current release;
+the extension is only built and released when it passes. The test characters in `tests/in/` are
+not redistributable, so they are not part of CI, and files saved by Blender 5.x cannot be opened
+in 4.2: run them locally on the Blender version they were saved with.
 
 What is checked: bone set and hierarchy against the template; rest positions, weight sums,
 normals and shape keys; deformation match in animation and in a random pose; scene restoration;
@@ -72,7 +88,15 @@ take named after the action with the right length, only the bind pose helper geo
 pose covering every bone, default transforms equal to the model's rest pose, no animated
 translation except `pelvis`, the hierarchy matches the model FBX, and the action, slot, NLA and
 frame are restored after export. If the file has no animation, a synthetic one is put on the rig
-temporarily.
+temporarily. Action selection: an action another armature plays is not listed, an unticked action
+is not exported, the action's manual frame range is used, nothing ticked is reported. Meshes
+parented to a bone (the hand's deform bone and the control the head follows) are exported with
+weight 1 on the right bone, keep their rest position and follow the bone. With Keep Extra Chains:
+no face or helper bones among the extras, mapped bones keep their parents, weight sums are
+preserved, the posed mesh matches, the extras are baked with the rig's rotation and are in the
+character and clip FBX. Also checked: the panel's pre-export checks, that saving with the preview built writes
+the source names, and that a file saved with a preview is repaired when opened (the copies are
+written to `out_dir`; the character .blend itself is never saved).
 
 Before a release, also import the exported FBX files into Cascadeur and Unity and check them
 manually (see the Cascadeur and Unity sections of the README).
