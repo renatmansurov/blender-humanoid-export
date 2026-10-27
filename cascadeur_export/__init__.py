@@ -13,7 +13,7 @@ from . import checks
 from . import export as export_mod
 from . import mapping
 
-ADDON_TITLE = "Mannequin Export"
+ADDON_TITLE = "Humanoid Export"
 CHECK_ICONS = {'ERROR': 'CANCEL', 'WARNING': 'ERROR', 'INFO': 'INFO'}
 # Line length in popups, which are not bound to a panel width.
 POPUP_WIDTH = 90
@@ -330,10 +330,10 @@ def _draw_action_list(layout, context, settings, anim_rig):
 
 
 class CSC_PT_panel(bpy.types.Panel):
-    bl_label = "Mannequin Export"
+    bl_label = ADDON_TITLE
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = "Export"
+    bl_category = "Humanoid"
 
     def draw(self, context):
         layout = self.layout

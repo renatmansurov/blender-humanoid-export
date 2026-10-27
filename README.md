@@ -1,25 +1,46 @@
-# Mannequin Export
+# Humanoid Export
 
-A Blender add-on (Blender 4.2+ / 5.x) that turns an Auto-Rig Pro or Rigify character into a clean
-UE4 Mannequin-style skeleton for [Cascadeur](https://cascadeur.com) and Unity.
+**Export Auto-Rig Pro and Rigify characters from Blender to Unity and Cascadeur.**
 
-One button builds the skeleton, transfers the skin weights and writes an FBX for Cascadeur and
-Unity. A second button bakes the rig's animation onto the same skeleton and writes clip FBX files
-for Unity. The source scene is left unchanged.
+A Blender add-on for Blender 4.2+ / 5.x. It builds a clean humanoid skeleton, transfers skin
+weights and exports FBX files without changing the source character or animation.
+
+| Export | Unity | Cascadeur |
+| --- | --- | --- |
+| Character: skeleton and skinned meshes | Humanoid avatar | Quick Rigging Tool, UE4_New template |
+| Animation: current timeline or selected actions | Baked FBX clips, with optional FPS resampling | — |
+
+Supported inputs are humanoid **Auto-Rig Pro** and **generated Rigify** rigs, including Rigify
+deform-only copies. Optional extra chains preserve bones for tails, hair, clothing and accessories.
+The output uses UE4 Mannequin bone names and hierarchy for compatibility with Cascadeur's rigging
+template and Unity Humanoid.
 
 Russian documentation: [docs/ru/README.md](docs/ru/README.md).
 
 ## Installation
 
 1. Download `cascadeur_export-<version>.zip` from the
-   [Releases](https://github.com/renatmansurov/blender-to-cascadeur/releases) page.
+   [Releases](https://github.com/renatmansurov/blender-humanoid-export/releases) page.
 2. In Blender: Edit → Preferences → Get Extensions → ⌄ → **Install from Disk** → pick the zip.
+3. Open 3D View → N panel → **Humanoid** → **Humanoid Export**.
+
+The extension ID remains `cascadeur_export`, so existing installations can be updated under the
+new display name. Release archives therefore still use `cascadeur_export-<version>.zip`.
 
 To build the zip yourself, see [CONTRIBUTING.md](CONTRIBUTING.md#building).
 
+## Quick start
+
+1. Select the character's armature or one of its meshes.
+2. Click **Export Character** to write the character FBX. Set **File** first to choose its path;
+   otherwise save the .blend and the FBX is written next to it.
+3. For Unity animation clips, use **Animation (Unity)**: choose **Current** or **All Actions**,
+   select the actions to export, then click **Export Animation**.
+4. Follow the [Unity](#unity) or [Cascadeur](#cascadeur) import steps below.
+
 ## Usage
 
-3D View → N panel → **Export** tab.
+3D View → N panel → **Humanoid** tab → **Humanoid Export** panel.
 
 - **Armature**: an Auto-Rig Pro or Rigify rig. Empty = the active object (or the armature of the
   selected mesh). If a Rigify control rig is selected but the meshes are bound to its deform copy

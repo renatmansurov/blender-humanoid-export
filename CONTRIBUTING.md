@@ -1,4 +1,17 @@
-# Contributing
+# Contributing to Humanoid Export
+
+Humanoid Export exports Auto-Rig Pro and Rigify characters from Blender to Unity and Cascadeur,
+and bakes animation clips for Unity. See [README.md](README.md) for supported workflows.
+
+## Project naming
+
+- Display name: **Humanoid Export**.
+- Sidebar location: 3D View → N panel → **Humanoid** tab → **Humanoid Export** panel.
+- Repository: [blender-humanoid-export](https://github.com/renatmansurov/blender-humanoid-export).
+- The Blender extension ID and source package remain `cascadeur_export` for compatibility with
+  existing installations. Built archives use `cascadeur_export-<version>.zip`.
+- Existing `csc_*` properties, operator IDs and temporary object names are implementation
+  identifiers; keep them stable when changing public-facing names.
 
 ## Repository layout
 
@@ -114,10 +127,10 @@ The output directory must exist. `dist/` is ignored by git.
 
 1. Update `version` in `cascadeur_export/blender_manifest.toml` (semantic versioning) and add a
    section to `CHANGELOG.md`.
-2. Commit, then tag and push:
+2. Commit, then tag and push. Replace `vX.Y.Z` with the manifest version prefixed with `v`:
    ```
-   git tag v0.3.0
-   git push origin main v0.3.0
+   git tag vX.Y.Z
+   git push origin main vX.Y.Z
    ```
 3. The `Build` workflow checks that the tag matches the manifest version, builds the zip and
    publishes a GitHub Release with it attached.

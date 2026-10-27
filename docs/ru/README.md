@@ -1,16 +1,34 @@
-# Mannequin Export (Blender 4.2+ / 5.x)
+# Humanoid Export (Blender 4.2+ / 5.x)
 
 Русская версия документации. Основной документ — [README.md](../../README.md) на английском; при расхождении верен он.
 
-Одна кнопка: из рига Auto-Rig Pro или Rigify собирается чистый скелет с именами UE4 Mannequin, веса переносятся, пишется FBX для Cascadeur и Unity. Вторая кнопка переносит анимацию рига на тот же скелет и пишет FBX клипов для Unity. Исходная сцена не меняется.
+**Экспорт персонажей Auto-Rig Pro и Rigify из Blender в Unity и Cascadeur.**
+
+Аддон собирает чистый humanoid-скелет, переносит веса и экспортирует FBX, не меняя исходного персонажа и его анимацию.
+
+| Экспорт | Unity | Cascadeur |
+| --- | --- | --- |
+| Персонаж: скелет и меши со скиннингом | Humanoid-аватар | Quick Rigging Tool, шаблон UE4_New |
+| Анимация: текущий таймлайн или выбранные экшены | Запечённые FBX-клипы, с пересчётом FPS по выбору | — |
+
+Поддерживаются humanoid-риги **Auto-Rig Pro** и **сгенерированные Rigify**, включая deform-копии Rigify. По выбору сохраняются дополнительные цепочки для хвоста, волос, одежды и аксессуаров. Имена и иерархия выходного скелета соответствуют UE4 Mannequin для совместимости с шаблоном риггинга Cascadeur и Unity Humanoid.
 
 ## Установка
-Скачать `cascadeur_export-<версия>.zip` со страницы [Releases](https://github.com/renatmansurov/blender-to-cascadeur/releases), затем Edit → Preferences → Get Extensions → ⌄ → **Install from Disk** → выбрать zip.
+Скачать `cascadeur_export-<версия>.zip` со страницы [Releases](https://github.com/renatmansurov/blender-humanoid-export/releases), затем Edit → Preferences → Get Extensions → ⌄ → **Install from Disk** → выбрать zip. Панель: 3D View → N-панель → **Humanoid** → **Humanoid Export**.
+
+ID расширения остаётся `cascadeur_export`, чтобы существующие установки можно было обновлять под новым отображаемым именем. Поэтому архивы релизов по-прежнему называются `cascadeur_export-<версия>.zip`.
 
 Собрать zip самому — см. [CONTRIBUTING.md](../../CONTRIBUTING.md#building).
 
+## Быстрый старт
+
+1. Выделить арматуру персонажа или один из его мешей.
+2. Нажать **Export Character**, чтобы записать FBX персонажа. Путь можно задать в **File**; если он пустой, нужно сохранить .blend, и FBX появится рядом с ним.
+3. Для клипов Unity в блоке **Animation (Unity)** выбрать **Current** или **All Actions**, отметить нужные экшены и нажать **Export Animation**.
+4. Выполнить шаги импорта из раздела [Unity](#unity) или [Cascadeur](#cascadeur).
+
 ## Использование
-3D View → N-панель → вкладка **Export**.
+3D View → N-панель → вкладка **Humanoid** → панель **Humanoid Export**.
 
 - **Armature** — риг ARP или Rigify. Пусто = активный объект (или арматура выделенного меша). Если выбран управляющий риг Rigify, а меши привязаны к его deform-копии (кости копии констрейнтами следуют за ригом), берётся копия; панель показывает, какой риг и тип используется.
 - **File** — куда писать FBX. Пусто = `<имя .blend>_cascadeur.fbx` рядом с .blend.

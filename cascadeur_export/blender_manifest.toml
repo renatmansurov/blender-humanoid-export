@@ -2,12 +2,12 @@ schema_version = "1.0.0"
 
 id = "cascadeur_export"
 version = "0.3.1"
-name = "Mannequin Export"
-tagline = "UE4 Mannequin skeleton and animation FBX for Cascadeur and Unity"
+name = "Humanoid Export"
+tagline = "Export Rigify and Auto-Rig Pro characters to Unity and Cascadeur"
 maintainer = "Renat Mansurov"
 type = "add-on"
 
-website = "https://github.com/renatmansurov/blender-to-cascadeur"
+website = "https://github.com/renatmansurov/blender-humanoid-export"
 
 tags = ["Animation", "Import-Export", "Rigging"]
 

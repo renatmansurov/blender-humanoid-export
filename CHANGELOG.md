@@ -1,4 +1,4 @@
-# Changelog
+# Humanoid Export changelog
 
 All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
@@ -29,7 +29,13 @@ follows [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- The sidebar tab is called **Export** instead of **Mannequin**.
+- Renamed the add-on from **Mannequin Export** to **Humanoid Export** and the repository from
+  `blender-to-cascadeur` to `blender-humanoid-export`. The extension ID and archive filename prefix
+  remain `cascadeur_export` for compatibility with existing installations.
+- The README now highlights character export for both Unity and Cascadeur, distinguishes Unity
+  animation export and includes a quick start.
+- The sidebar tab is called **Humanoid** instead of **Mannequin**, with the panel titled
+  **Humanoid Export**.
 - All Actions exports only the ticked actions; in Blender 4.4+ the clip plays the slot that
   animates the rig instead of the first suitable one.
 
