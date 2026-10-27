@@ -75,7 +75,7 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: cascadeur_export
+          name: humanoid-export
           path: dist/*.zip
 
       - name: Publish GitHub Release

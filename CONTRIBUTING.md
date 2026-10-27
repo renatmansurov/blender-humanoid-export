@@ -10,6 +10,8 @@ and bakes animation clips for Unity. See [README.md](README.md) for supported wo
 - Repository: [blender-humanoid-export](https://github.com/renatmansurov/blender-humanoid-export).
 - The Blender extension ID and source package remain `cascadeur_export` for compatibility with
   existing installations. Built archives use `cascadeur_export-<version>.zip`.
+- The downloadable GitHub Actions artifact is named **humanoid-export**. Extract it to get the
+  installable `cascadeur_export-<version>.zip` extension archive.
 - Existing `csc_*` properties, operator IDs and temporary object names are implementation
   identifiers; keep them stable when changing public-facing names.
 
