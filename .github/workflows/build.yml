@@ -27,7 +27,7 @@ jobs:
           - { series: "4.2", version: "4.2.0" }
           - { series: "5.2", version: "5.2.1" }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: ./.github/actions/setup-blender
         with:
@@ -37,7 +37,7 @@ jobs:
       - name: Run tests on generated Rigify characters
         run: bash tests/run_rigify_variants.sh ./blender/blender tests/out/rigify
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: test-logs-${{ matrix.blender.version }}
@@ -49,7 +49,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: ./.github/actions/setup-blender
         with:
@@ -73,7 +73,7 @@ jobs:
           mkdir -p dist
           ./blender/blender --factory-startup --command extension build --source-dir cascadeur_export --output-dir dist
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: cascadeur_export
           path: dist/*.zip
