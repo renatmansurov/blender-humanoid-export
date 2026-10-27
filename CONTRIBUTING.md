@@ -9,9 +9,10 @@ and bakes animation clips for Unity. See [README.md](README.md) for supported wo
 - Sidebar location: 3D View → N panel → **Humanoid** tab → **Humanoid Export** panel.
 - Repository: [blender-humanoid-export](https://github.com/renatmansurov/blender-humanoid-export).
 - The Blender extension ID and source package remain `cascadeur_export` for compatibility with
-  existing installations. Built archives use `cascadeur_export-<version>.zip`.
-- The downloadable GitHub Actions artifact is named **humanoid-export**. Extract it to get the
-  installable `cascadeur_export-<version>.zip` extension archive.
+  existing installations. Built archives use `humanoid-export-<version>.zip`; the ZIP filename is
+  independent of the extension ID.
+- GitHub Actions uploads the installable ZIP directly with `archive: false`. The artifact takes
+  the ZIP's filename, with no outer archive to extract.
 - Existing `csc_*` properties, operator IDs and temporary object names are implementation
   identifiers; keep them stable when changing public-facing names.
 
@@ -120,10 +121,12 @@ manually (see the Cascadeur and Unity sections of the README).
 
 ```
 blender --factory-startup --command extension validate cascadeur_export
-blender --factory-startup --command extension build --source-dir cascadeur_export --output-dir dist
+blender --factory-startup --command extension build --source-dir cascadeur_export --output-filepath dist/humanoid-export-VERSION.zip
 ```
 
-The output directory must exist. `dist/` is ignored by git.
+Replace `VERSION` with the manifest version. The output directory must exist. `dist/` is ignored
+by git. CI reads the version from the manifest automatically and uses the same filename for
+Actions artifacts and release assets.
 
 ## Releasing
 

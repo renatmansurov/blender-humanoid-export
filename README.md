@@ -19,13 +19,19 @@ Russian documentation: [docs/ru/README.md](docs/ru/README.md).
 
 ## Installation
 
-1. Download `cascadeur_export-<version>.zip` from the
+1. Download `humanoid-export-<version>.zip` from the
    [Releases](https://github.com/renatmansurov/blender-humanoid-export/releases) page.
 2. In Blender: Edit → Preferences → Get Extensions → ⌄ → **Install from Disk** → pick the zip.
 3. Open 3D View → N panel → **Humanoid** → **Humanoid Export**.
 
 The extension ID remains `cascadeur_export`, so existing installations can be updated under the
-new display name. Release archives therefore still use `cascadeur_export-<version>.zip`.
+new display name. The ZIP filename is independent of this ID; older releases may still use
+`cascadeur_export-<version>.zip`.
+
+For a build from `main`, open a successful **Build** run on the
+[Actions page](https://github.com/renatmansurov/blender-humanoid-export/actions/workflows/build.yml)
+and download its `humanoid-export-<version>.zip` artifact. It is the installable extension ZIP,
+with no outer archive to extract.
 
 To build the zip yourself, see [CONTRIBUTING.md](CONTRIBUTING.md#building).
 

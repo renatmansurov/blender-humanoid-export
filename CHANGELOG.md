@@ -30,8 +30,10 @@ follows [Semantic Versioning](https://semver.org/).
 ### Changed
 
 - Renamed the add-on from **Mannequin Export** to **Humanoid Export** and the repository from
-  `blender-to-cascadeur` to `blender-humanoid-export`. The extension ID and archive filename prefix
-  remain `cascadeur_export` for compatibility with existing installations.
+  `blender-to-cascadeur` to `blender-humanoid-export`. The extension ID remains `cascadeur_export`
+  for compatibility with existing installations.
+- Installable archives are named `humanoid-export-<version>.zip`. GitHub Actions uploads the ZIP
+  directly, so downloading a build no longer produces a ZIP containing another ZIP.
 - The README now highlights character export for both Unity and Cascadeur, distinguishes Unity
   animation export and includes a quick start.
 - The sidebar tab is called **Humanoid** instead of **Mannequin**, with the panel titled

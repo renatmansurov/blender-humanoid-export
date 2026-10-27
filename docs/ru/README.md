@@ -14,9 +14,11 @@
 Поддерживаются humanoid-риги **Auto-Rig Pro** и **сгенерированные Rigify**, включая deform-копии Rigify. По выбору сохраняются дополнительные цепочки для хвоста, волос, одежды и аксессуаров. Имена и иерархия выходного скелета соответствуют UE4 Mannequin для совместимости с шаблоном риггинга Cascadeur и Unity Humanoid.
 
 ## Установка
-Скачать `cascadeur_export-<версия>.zip` со страницы [Releases](https://github.com/renatmansurov/blender-humanoid-export/releases), затем Edit → Preferences → Get Extensions → ⌄ → **Install from Disk** → выбрать zip. Панель: 3D View → N-панель → **Humanoid** → **Humanoid Export**.
+Скачать `humanoid-export-<версия>.zip` со страницы [Releases](https://github.com/renatmansurov/blender-humanoid-export/releases), затем Edit → Preferences → Get Extensions → ⌄ → **Install from Disk** → выбрать zip. Панель: 3D View → N-панель → **Humanoid** → **Humanoid Export**.
 
-ID расширения остаётся `cascadeur_export`, чтобы существующие установки можно было обновлять под новым отображаемым именем. Поэтому архивы релизов по-прежнему называются `cascadeur_export-<версия>.zip`.
+ID расширения остаётся `cascadeur_export`, чтобы существующие установки можно было обновлять под новым отображаемым именем. Имя ZIP от этого ID не зависит; в старых релизах архив ещё может называться `cascadeur_export-<версия>.zip`.
+
+Для сборки из `main` открыть успешный запуск **Build** на [странице Actions](https://github.com/renatmansurov/blender-humanoid-export/actions/workflows/build.yml) и скачать артефакт `humanoid-export-<версия>.zip`. Это установочный ZIP расширения: внешнего архива, который нужно сначала распаковать, больше нет.
 
 Собрать zip самому — см. [CONTRIBUTING.md](../../CONTRIBUTING.md#building).
 
