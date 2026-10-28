@@ -16,7 +16,7 @@
 ## Установка
 Скачать `humanoid-export-<версия>.zip` со страницы [Releases](https://github.com/renatmansurov/blender-humanoid-export/releases), затем Edit → Preferences → Get Extensions → ⌄ → **Install from Disk** → выбрать zip. Панель: 3D View → N-панель → **Humanoid** → **Humanoid Export**.
 
-ID расширения остаётся `cascadeur_export`, чтобы существующие установки можно было обновлять под новым отображаемым именем. Имя ZIP от этого ID не зависит; в старых релизах архив ещё может называться `cascadeur_export-<версия>.zip`.
+Обновление с 0.4.0 и старше: ID расширения сменился с `cascadeur_export` на `humanoid_export`, поэтому Blender ставит новую версию как отдельное расширение. Сначала удалить старое (Preferences → Add-ons → Humanoid Export / Cascadeur Export → ⌄ → **Uninstall**). Настройки экспорта, сохранённые в .blend, сохраняются.
 
 Для сборки из `main` открыть успешный запуск **Build** на [странице Actions](https://github.com/renatmansurov/blender-humanoid-export/actions/workflows/build.yml) и скачать артефакт `humanoid-export-<версия>.zip`. Это установочный ZIP расширения: внешнего архива, который нужно сначала распаковать, больше нет.
 
@@ -33,7 +33,7 @@ ID расширения остаётся `cascadeur_export`, чтобы суще
 3D View → N-панель → вкладка **Humanoid** → панель **Humanoid Export**.
 
 - **Armature** — риг ARP или Rigify. Пусто = активный объект (или арматура выделенного меша). Если выбран управляющий риг Rigify, а меши привязаны к его deform-копии (кости копии констрейнтами следуют за ригом), берётся копия; панель показывает, какой риг и тип используется.
-- **File** — куда писать FBX. Пусто = `<имя .blend>_cascadeur.fbx` рядом с .blend.
+- **File** — куда писать FBX. Пусто = `<имя .blend>_humanoid.fbx` рядом с .blend.
 - **Keep Jaw & Eyes** — оставить `jaw`, `eye_l`, `eye_r`; остальные лицевые кости сливаются в head/jaw.
 - **Keep Extra Chains** (по умолчанию выключено) — deform-кости, которым нет пары в Mannequin (хвост, волосы, юбка, плащ, `DEF-breast.*` у Rigify, кастомные кости `cc_*` у Auto-Rig Pro), экспортируются отдельными костями под ближайшей замапленной костью с именем исходной кости, а не сливают в неё свои веса. Лицевые кости (кроме челюсти и глаз), основания пальцев и ладони, `DEF-pelvis.*` у Rigify, twist- и `*_bend`-помощники Auto-Rig Pro по-прежнему сливаются. Панель показывает список дополнительных костей. Имена и пути 55 основных костей не меняются, поэтому шаблон UE4_New в Quick Rigging Tool Cascadeur по-прежнему подходит (слотов для дополнительных костей в нём нет). Про Unity — см. раздел [Unity](#unity), пункт 4.
 - **Export Character** — экспорт.
@@ -68,7 +68,7 @@ ID расширения остаётся `cascadeur_export`, чтобы суще
 - Если слитые веса вершины больше 1, веса этой вершины нормализуются (Blender иначе обрезал бы их до 1 и исказил пропорции; деформация не меняется).
 - Модификаторы, меняющие только нормали (Weighted Normal, Normal Edit), на мешах с shape keys запекаются в custom normals — shape keys сохраняются. Остальные модификаторы, как и раньше, применяются (shape keys при этом теряются, с предупреждением).
 - FBX в сантиметрах (UnitScaleFactor 1), у `root` масштаб 1, без leaf-костей, без анимации, -Z Forward / Y Up.
-- Таблица соответствий — `cascadeur_export/mapping.py`.
+- Таблица соответствий — `humanoid_export/mapping.py`.
 
 ## Cascadeur
 1. File → Import → FBX, пресет **Model**.

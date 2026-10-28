@@ -33,7 +33,7 @@ class CSC_Settings(bpy.types.PropertyGroup):
     filepath: bpy.props.StringProperty(
         name="File",
         subtype='FILE_PATH',
-        description="Output FBX. Empty = <blend name>_cascadeur.fbx next to the .blend",
+        description="Output FBX. Empty = <blend name>_humanoid.fbx next to the .blend",
     )
     keep_face: bpy.props.BoolProperty(
         name="Keep Jaw & Eyes",
@@ -94,7 +94,7 @@ def _resolve_filepath(context):
     if not bpy.data.filepath:
         return None
     stem = os.path.splitext(bpy.path.basename(bpy.data.filepath))[0]
-    return os.path.join(os.path.dirname(bpy.data.filepath), f"{stem}_cascadeur.fbx")
+    return os.path.join(os.path.dirname(bpy.data.filepath), f"{stem}_humanoid.fbx")
 
 
 def _resolve_anim_dir(context):
@@ -165,7 +165,7 @@ def _draw_checks(layout, context, items):
 
 
 class CSC_OT_export_character(bpy.types.Operator):
-    bl_idname = "cascadeur.export_character"
+    bl_idname = "humanoid.export_character"
     bl_label = "Export Character"
     bl_description = "Build a clean UE4-style skeleton from the rig and export it with its meshes to FBX"
     bl_options = {'REGISTER'}
@@ -198,7 +198,7 @@ class CSC_OT_export_character(bpy.types.Operator):
 
 
 class CSC_OT_export_animation(bpy.types.Operator):
-    bl_idname = "cascadeur.export_animation"
+    bl_idname = "humanoid.export_animation"
     bl_label = "Export Animation"
     bl_description = ("Bake the rig's animation onto the UE4-style skeleton and export one "
                       "skeleton-only FBX per clip for Unity")
@@ -251,7 +251,7 @@ class CSC_OT_export_animation(bpy.types.Operator):
 
 
 class CSC_OT_build_preview(bpy.types.Operator):
-    bl_idname = "cascadeur.build_preview"
+    bl_idname = "humanoid.build_preview"
     bl_label = "Build Preview"
     bl_description = "Build the export skeleton and meshes in the scene for inspection (no export)"
     bl_options = {'REGISTER', 'UNDO'}
@@ -274,7 +274,7 @@ class CSC_OT_build_preview(bpy.types.Operator):
 
 
 class CSC_OT_clear_preview(bpy.types.Operator):
-    bl_idname = "cascadeur.clear_preview"
+    bl_idname = "humanoid.clear_preview"
     bl_label = "Clear Preview"
     bl_description = "Remove the preview skeleton and meshes"
     bl_options = {'REGISTER', 'UNDO'}

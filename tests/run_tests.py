@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Renat Mansurov
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Headless checks for cascadeur_export. Never saves the .blend.
+"""Headless checks for humanoid_export. Never saves the .blend.
 
     blender -b <character.blend> --factory-startup --python tests/run_tests.py -- [out_dir]
 """
@@ -18,8 +18,8 @@ from mathutils import Matrix, Vector
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
-import cascadeur_export  # noqa: E402
-from cascadeur_export import anim as A, build as B, checks as C, export as E, mapping as M  # noqa: E402
+import humanoid_export  # noqa: E402
+from humanoid_export import anim as A, build as B, checks as C, export as E, mapping as M  # noqa: E402
 
 # Cascadeur's Quick Rigging Tool template the skeleton is checked against; CSC_UE4_TEMPLATE overrides it.
 UE4_TEMPLATE = os.environ.get(
@@ -326,12 +326,12 @@ def test_animation(ctx, rig, names_before):
         settings.anim_fps = out_fps
         before = anim_state(anim_rig), scene.frame_current, scene.render.fps, scene.render.fps_base
         clips = A.clips(ctx, anim_rig, mode)
-        paths = [os.path.join(OUT_DIR, cascadeur_export._anim_filename(c[0])) for c in clips]
+        paths = [os.path.join(OUT_DIR, humanoid_export._anim_filename(c[0])) for c in clips]
         for p in paths:
             if os.path.exists(p):
                 os.remove(p)
         ctx.view_layer.objects.active = rig
-        check(bpy.ops.cascadeur.export_animation() == {'FINISHED'}, f"{mode}: animation export finished")
+        check(bpy.ops.humanoid.export_animation() == {'FINISHED'}, f"{mode}: animation export finished")
         check((anim_state(anim_rig), scene.frame_current, scene.render.fps, scene.render.fps_base) == before,
               f"{mode}: rig action, slot, NLA, frame and scene fps restored")
         check(sorted(o.name for o in bpy.data.objects) == names_before, f"{mode}: object names restored")
@@ -369,7 +369,7 @@ def test_animation(ctx, rig, names_before):
             check(info["moving"] <= {"pelvis"}, f"{mode}: only pelvis translation animated {sorted(info['moving'])[:5]}")
         if mode == 'ALL':
             check(decoy.name not in [c[0] for c in clips]
-                  and not os.path.exists(os.path.join(OUT_DIR, cascadeur_export._anim_filename(decoy.name))),
+                  and not os.path.exists(os.path.join(OUT_DIR, humanoid_export._anim_filename(decoy.name))),
                   "ALL: unticked action not exported")
     bpy.data.actions.remove(decoy)
 
@@ -440,12 +440,12 @@ def test_save(ctx, rig, names_before):
     ctx.view_layer.objects.active = rig
 
     B.build(ctx, rig, keep_face=True)
-    bpy.app.handlers.save_pre.remove(cascadeur_export._on_save_pre)
+    bpy.app.handlers.save_pre.remove(humanoid_export._on_save_pre)
     broken = os.path.join(OUT_DIR, "broken_preview.blend")
     try:
         bpy.ops.wm.save_as_mainfile(filepath=broken, copy=True)
     finally:
-        bpy.app.handlers.save_pre.append(cascadeur_export._on_save_pre)
+        bpy.app.handlers.save_pre.append(humanoid_export._on_save_pre)
     B.clear(ctx)
     ctx.view_layer.objects.active = rig
     objects, _ = saved_object_names(broken)
@@ -532,7 +532,7 @@ def test_load_repair(path, names_before, mesh_names):
 
 
 def main():
-    cascadeur_export.register()
+    humanoid_export.register()
     ctx = bpy.context
     rig = next(o for o in ctx.view_layer.objects
                if o.type == 'ARMATURE' and M.detect(o) and B.find_meshes(o, ctx.view_layer))
@@ -651,7 +651,7 @@ def main():
     print("[export]")
     ctx.view_layer.objects.active = rig
     ctx.scene.csc_export.filepath = os.path.join(OUT_DIR, "operator_export.fbx")
-    check(bpy.ops.cascadeur.export_character() == {'FINISHED'}, "operator export finished")
+    check(bpy.ops.humanoid.export_character() == {'FINISHED'}, "operator export finished")
     check(ctx.view_layer.objects.active == rig, "active object restored")
     check(sorted(o.name for o in bpy.data.objects) == names_before, "object names restored after export")
     info = fbx_summary(ctx.scene.csc_export.filepath)
@@ -856,9 +856,9 @@ def test_extra_chains(ctx, rig, names_before, orig):
     settings.anim_dir, settings.anim_source, settings.anim_fps = out, 'ACTIVE', 0
     ctx.view_layer.objects.active = rig
     try:
-        check(bpy.ops.cascadeur.export_character() == {'FINISHED'}, "extras: character export finished")
-        clip = os.path.join(out, cascadeur_export._anim_filename(A.active_clip_name(anim_rig)))
-        check(bpy.ops.cascadeur.export_animation() == {'FINISHED'}, "extras: animation export finished")
+        check(bpy.ops.humanoid.export_character() == {'FINISHED'}, "extras: character export finished")
+        clip = os.path.join(out, humanoid_export._anim_filename(A.active_clip_name(anim_rig)))
+        check(bpy.ops.humanoid.export_animation() == {'FINISHED'}, "extras: animation export finished")
         character = fbx_anim_summary(settings.filepath)
         info = fbx_anim_summary(clip)
         bones = set(info["parents"]) - {"root", E.BIND_POSE_MESH}

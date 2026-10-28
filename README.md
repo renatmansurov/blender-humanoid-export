@@ -24,9 +24,10 @@ Russian documentation: [docs/ru/README.md](docs/ru/README.md).
 2. In Blender: Edit → Preferences → Get Extensions → ⌄ → **Install from Disk** → pick the zip.
 3. Open 3D View → N panel → **Humanoid** → **Humanoid Export**.
 
-The extension ID remains `cascadeur_export`, so existing installations can be updated under the
-new display name. The ZIP filename is independent of this ID; older releases may still use
-`cascadeur_export-<version>.zip`.
+Upgrading from 0.4.0 or older: the extension ID changed from `cascadeur_export` to
+`humanoid_export`, so Blender installs the new version as a separate extension. Uninstall the old
+one first (Preferences → Add-ons → Humanoid Export / Cascadeur Export → ⌄ → **Uninstall**). The
+export settings saved in your .blend files are kept.
 
 For a build from `main`, open a successful **Build** run on the
 [Actions page](https://github.com/renatmansurov/blender-humanoid-export/actions/workflows/build.yml)
@@ -52,7 +53,7 @@ To build the zip yourself, see [CONTRIBUTING.md](CONTRIBUTING.md#building).
   selected mesh). If a Rigify control rig is selected but the meshes are bound to its deform copy
   (whose bones follow the rig through constraints), the copy is used; the panel shows which rig and
   rig type are in use.
-- **File**: output FBX. Empty = `<blend name>_cascadeur.fbx` next to the .blend.
+- **File**: output FBX. Empty = `<blend name>_humanoid.fbx` next to the .blend.
 - **Keep Jaw & Eyes**: keep `jaw`, `eye_l`, `eye_r`; all other face bones are merged into
   head/jaw.
 - **Keep Extra Chains** (off by default): deform bones that have no Mannequin counterpart (tail,
@@ -161,7 +162,7 @@ How keys are baked:
   lost then, with a warning).
 - FBX in centimetres (UnitScaleFactor 1), `root` scale 1, no leaf bones, no animation,
   -Z Forward / Y Up.
-- The bone mapping table is in `cascadeur_export/mapping.py`.
+- The bone mapping table is in `humanoid_export/mapping.py`.
 
 ## Cascadeur
 

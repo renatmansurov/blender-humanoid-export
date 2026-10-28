@@ -8,18 +8,18 @@ and bakes animation clips for Unity. See [README.md](README.md) for supported wo
 - Display name: **Humanoid Export**.
 - Sidebar location: 3D View → N panel → **Humanoid** tab → **Humanoid Export** panel.
 - Repository: [blender-humanoid-export](https://github.com/renatmansurov/blender-humanoid-export).
-- The Blender extension ID and source package remain `cascadeur_export` for compatibility with
-  existing installations. Built archives use `humanoid-export-<version>.zip`; the ZIP filename is
-  independent of the extension ID.
+- Blender extension ID and source package: `humanoid_export` (up to 0.4.0: `cascadeur_export`).
+  Operators use the `humanoid.` prefix. Built archives use `humanoid-export-<version>.zip`; the
+  ZIP filename is independent of the extension ID.
 - GitHub Actions uploads the installable ZIP directly with `archive: false`. The artifact takes
   the ZIP's filename, with no outer archive to extract.
-- Existing `csc_*` properties, operator IDs and temporary object names are implementation
-  identifiers; keep them stable when changing public-facing names.
+- Existing `csc_*` properties and temporary object names are implementation identifiers stored in
+  users' .blend files; keep them stable when changing public-facing names.
 
 ## Repository layout
 
 ```
-cascadeur_export/        The add-on itself (a Blender extension). Everything in here ships in the zip.
+humanoid_export/         The add-on itself (a Blender extension). Everything in here ships in the zip.
   blender_manifest.toml  Extension manifest: id, version, Blender version, license, permissions.
   __init__.py            UI panel, properties, operators, register/unregister.
   mapping.py             Auto-Rig Pro / Rigify deform bones -> UE4 Mannequin skeleton.
@@ -53,7 +53,7 @@ build output (`dist/`), the local Unity test project and editor/AI-assistant fil
   current Blender release. Guard newer APIs with `hasattr` checks.
 - The add-on never leaves the user's scene modified: temporary objects, renames, selection,
   active object, actions, NLA state and the current frame are restored after every operation.
-- Use relative imports inside `cascadeur_export/` (`from . import build`), as required for
+- Use relative imports inside `humanoid_export/` (`from . import build`), as required for
   extensions.
 - User-facing behaviour changes are documented in `README.md` and `CHANGELOG.md`.
 
@@ -120,8 +120,8 @@ manually (see the Cascadeur and Unity sections of the README).
 ## Building
 
 ```
-blender --factory-startup --command extension validate cascadeur_export
-blender --factory-startup --command extension build --source-dir cascadeur_export --output-filepath dist/humanoid-export-VERSION.zip
+blender --factory-startup --command extension validate humanoid_export
+blender --factory-startup --command extension build --source-dir humanoid_export --output-filepath dist/humanoid-export-VERSION.zip
 ```
 
 Replace `VERSION` with the manifest version. The output directory must exist. `dist/` is ignored
@@ -130,7 +130,7 @@ Actions artifacts and release assets.
 
 ## Releasing
 
-1. Update `version` in `cascadeur_export/blender_manifest.toml` (semantic versioning) and add a
+1. Update `version` in `humanoid_export/blender_manifest.toml` (semantic versioning) and add a
    section to `CHANGELOG.md`.
 2. Commit, then tag and push. Replace `vX.Y.Z` with the manifest version prefixed with `v`:
    ```

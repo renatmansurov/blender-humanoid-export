@@ -4,6 +4,18 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- The extension ID is now `humanoid_export` instead of `cascadeur_export`, so Blender no longer
+  shows "cascadeur_export" when installing it or in the console. Blender treats it as a new
+  extension: uninstall the old one before installing this version. Export settings saved in .blend
+  files are kept.
+- Operators are renamed from `cascadeur.*` to `humanoid.*` (for example
+  `bpy.ops.humanoid.export_character()`).
+- The default character file is `<blend name>_humanoid.fbx` instead of `<blend name>_cascadeur.fbx`.
+
 ## [0.4.0]
 
 ### Added

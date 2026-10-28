@@ -59,20 +59,20 @@ jobs:
       - name: Check tag matches manifest version
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
-          manifest_version=$(sed -n 's/^version = "\(.*\)"/\1/p' cascadeur_export/blender_manifest.toml)
+          manifest_version=$(sed -n 's/^version = "\(.*\)"/\1/p' humanoid_export/blender_manifest.toml)
           if [ "${GITHUB_REF_NAME#v}" != "$manifest_version" ]; then
             echo "Tag $GITHUB_REF_NAME does not match manifest version $manifest_version"
             exit 1
           fi
 
       - name: Validate extension
-        run: ./blender/blender --factory-startup --command extension validate cascadeur_export
+        run: ./blender/blender --factory-startup --command extension validate humanoid_export
 
       - name: Build extension
         run: |
           mkdir -p dist
-          manifest_version=$(sed -n 's/^version = "\(.*\)"/\1/p' cascadeur_export/blender_manifest.toml)
-          ./blender/blender --factory-startup --command extension build --source-dir cascadeur_export --output-filepath "dist/humanoid-export-${manifest_version}.zip"
+          manifest_version=$(sed -n 's/^version = "\(.*\)"/\1/p' humanoid_export/blender_manifest.toml)
+          ./blender/blender --factory-startup --command extension build --source-dir humanoid_export --output-filepath "dist/humanoid-export-${manifest_version}.zip"
 
       - name: Upload installable extension archive
         uses: actions/upload-artifact@v7
