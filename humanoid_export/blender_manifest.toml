@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "humanoid_export"
-version = "0.4.0"
+version = "0.4.1"
 name = "Humanoid Export"
 tagline = "Export Rigify and Auto-Rig Pro characters to Unity and Cascadeur"
 maintainer = "Renat Mansurov"
