@@ -121,7 +121,8 @@ def _plan_skeleton(rig, keep_face, warnings):
         if not present:
             if target in mapping.REQUIRED:
                 raise BuildError(f"Source bone(s) {sources} for '{target}' not found in '{rig.name}'")
-            warnings.append(f"'{target}' skipped: {sources} not found")
+            # The rig simply has no such bone (a short spine, a missing finger). Nothing is lost;
+            # the panel lists these. A bone built from only some of its sources still warns below.
             continue
         if missing:
             warnings.append(f"'{target}': missing {missing}, built from {present}")

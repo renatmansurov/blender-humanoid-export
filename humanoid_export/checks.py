@@ -43,11 +43,10 @@ def character(context, rig, keep_face=True, extra_chains=False):
     skipped = [t for t, _, _ in mapping.entries(deform, keep_face) if t not in plan]
     if skipped:
         result.append(('INFO', f"Not in the rig, skipped: {_names(skipped)}"))
-    skip_prefixes = tuple(f"'{t}' skipped" for t in skipped)
     extras = build_mod._plan_extras(deform, plan, profile, warnings) if extra_chains else {}
     if extras:
         result.append(('INFO', f"Extra bones kept: {_names(extras)}"))
-    result += [('WARNING', w) for w in warnings if not w.startswith(skip_prefixes)]
+    result += [('WARNING', w) for w in warnings]
 
     meshes = build_mod.find_meshes(deform, view_layer)
     rigs = build_mod.linked_rigs(rig, deform)

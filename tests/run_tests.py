@@ -561,7 +561,7 @@ def main():
         bone = arm.data.bones.get(joint)
         if bone is None:
             # Optional joints the rig does not have (e.g. fingers of Rigify's Basic Human) are
-            # skipped with a build warning.
+            # left out of the skeleton.
             check(joint not in M.REQUIRED and joint not in plan, f"template joint {joint} exists")
             continue
         actual = ["root"] + [p.name for p in reversed(bone.parent_recursive)]

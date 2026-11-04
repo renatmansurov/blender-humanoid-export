@@ -13,7 +13,7 @@ from collections import namedtuple
 
 ROOT_NAME = "root"
 
-# Bones the export cannot do without. Everything else is skipped with a warning.
+# Bones the export cannot do without. Any other bone the rig does not have is left out.
 REQUIRED = {
     "pelvis", "spine_01", "neck_01", "head",
     "thigh_l", "calf_l", "foot_l", "thigh_r", "calf_r", "foot_r",
@@ -49,7 +49,7 @@ ARP_SIGNATURE = ("c_root_bend.x", "c_thigh_twist.l")
 
 def _arp_body(bones):
     # ARP rigs have 1 to 4+ spine bones c_spine_NN_bend.x. The first three are always listed, so
-    # a rig with fewer gets a warning and its neck and clavicles hang off the last one present.
+    # a rig with fewer leaves the missing spine bones out; its neck and clavicles hang off the last one present.
     torso = [f"c_spine_{i:02d}_bend.x" for i in range(1, 4)]
     while f"c_spine_{len(torso) + 1:02d}_bend.x" in bones:
         torso.append(f"c_spine_{len(torso) + 1:02d}_bend.x")
