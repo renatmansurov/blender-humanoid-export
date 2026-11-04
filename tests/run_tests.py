@@ -203,6 +203,15 @@ def fbx_anim_summary(path):
     return info
 
 
+def fbx_model_names(path):
+    """Model (transform) names in the FBX, in file order. Duplicates are kept."""
+    from io_scene_fbx import parse_fbx
+
+    root, _version = parse_fbx.parse(path)
+    objects = next(e for e in root.elems if e.id == b"Objects")
+    return [e.props[1].split(b"\x00")[0].decode() for e in objects.elems if e.id == b"Model"]
+
+
 def anim_state(ob):
     ad = ob.animation_data
     if ad is None:
@@ -521,6 +530,110 @@ def test_checks(ctx, rig, names_before):
     check(sorted(o.name for o in bpy.data.objects) == names_before, "checks: object names restored")
 
 
+def _hold_name(name, displaced):
+    """Renames whoever holds ``name`` so a test can take it. ``displaced`` restores the old names."""
+    holder = bpy.data.objects.get(name)
+    if holder is None:
+        return
+    held = holder.name
+    holder.name = f"{name}__csc_test_hold"
+    displaced.append((holder, held))
+
+
+def _assert_mesh_export(ctx, rig, export_name, path):
+    """Builds and exports; the mesh tagged ``csc_name_test`` must be named ``export_name``."""
+    result = B.build(ctx, rig, keep_face=True)
+    try:
+        copy = next((m for m in result.meshes if m.get("csc_name_test")), None)
+        check(copy is not None and copy.name == export_name,
+              f"mesh head exports as {export_name} ({None if copy is None else copy.name})")
+        check(not any(m.name == "head" for m in result.meshes), "no exported mesh is named head")
+        check("head" in result.armature.data.bones, "the head bone is unchanged")
+        if export_name == "head_00_mesh":
+            check(any(m.name == "head_mesh" for m in result.meshes), "the mesh named head_mesh keeps it")
+        E.export_fbx(ctx, path, result)
+        names = fbx_model_names(path)
+        duplicates = sorted({n for n in names if names.count(n) > 1})
+        check(not duplicates, f"no duplicate FBX transforms {duplicates[:5]}")
+        check(names.count("head") == 1 and export_name in names,
+              f"FBX has one head bone and {export_name}")
+        info = fbx_anim_summary(path)
+        arm = result.armature
+        expected = {b.name: (b.parent.name if b.parent else arm.name) for b in arm.data.bones}
+        expected[arm.name] = None
+        got = {n: info["parents"].get(n) for n in expected}
+        changed = [n for n in expected if got[n] != expected[n]]
+        check(not changed, f"skeleton hierarchy unchanged {changed[:5]}")
+    finally:
+        B.clear(ctx)
+
+
+def test_mesh_node_names(ctx, rig, names_before):
+    """A mesh named like a bone is exported as name_mesh, then name_00_mesh. The scene is restored."""
+    print("[mesh node names]")
+    check(B._free_mesh_name("body", {"head", "root"}) == "body", "a free mesh name is kept")
+    check(B._free_mesh_name("head", {"head", "root"}) == "head_mesh", "head -> head_mesh")
+    taken = {"head", "head_mesh", "root"}
+    check(B._free_mesh_name("head", taken) == "head_00_mesh", "a taken head_mesh becomes head_00_mesh")
+    taken.add("head_00_mesh")
+    check(B._free_mesh_name("head", taken) == "head_01_mesh", "a taken number is skipped")
+    taken = {"head", "head_mesh", *(f"head_{i:02d}_mesh" for i in range(100))}
+    check(B._free_mesh_name("head", taken) == "head_100_mesh", "the counter continues past 99")
+
+    held_aside = []
+    _hold_name("head", held_aside)
+    _hold_name("head_mesh", held_aside)
+    head = bpy.data.objects.new("head", bpy.data.meshes.new("csc_name_head"))
+    kept = bpy.data.objects.new("head_mesh", bpy.data.meshes.new("csc_name_kept"))
+    try:
+        check(head.name == "head" and kept.name == "head_mesh",
+              f"assignment fixtures named head and head_mesh ({head.name}, {kept.name})")
+        assigned = B._mesh_export_names([head, kept], {"head", "root"})
+        check(assigned[head] == "head_00_mesh" and assigned[kept] == "head_mesh",
+              "an existing head_mesh is kept and head continues at head_00_mesh "
+              f"({assigned[head]}, {assigned[kept]})")
+    finally:
+        for ob in (head, kept):
+            data = ob.data
+            bpy.data.objects.remove(ob)
+            if data.users == 0:
+                bpy.data.meshes.remove(data)
+        for holder, held in reversed(held_aside):
+            holder.name = held
+
+    deform = B.find_deform_rig(rig, ctx.view_layer)
+    mesh = B.find_meshes(deform, ctx.view_layer)[0]
+    saved = mesh.name
+    displaced = []
+    dup = None
+    try:
+        mesh["csc_name_test"] = True
+        _hold_name("head", displaced)
+        mesh.name = "head"
+        check(mesh.name == "head", f"test mesh renamed to head ({mesh.name})")
+        _assert_mesh_export(ctx, rig, "head_mesh", os.path.join(OUT_DIR, "mesh_name_head.fbx"))
+
+        _hold_name("head_mesh", displaced)
+        dup = cube(ctx, "head_mesh")
+        dup.modifiers.new("Armature", "ARMATURE").object = deform
+        check(dup.name == "head_mesh", f"second mesh named head_mesh ({dup.name})")
+        _assert_mesh_export(ctx, rig, "head_00_mesh", os.path.join(OUT_DIR, "mesh_name_head_00.fbx"))
+    finally:
+        B.clear(ctx)
+        if dup is not None:
+            data = dup.data
+            remove_object(ctx, dup)
+            if data.users == 0:
+                bpy.data.meshes.remove(data)
+        if mesh.get("csc_name_test") is not None:
+            del mesh["csc_name_test"]
+        mesh.name = saved
+        for holder, held in reversed(displaced):
+            holder.name = held
+        ctx.view_layer.objects.active = rig
+    check(sorted(o.name for o in bpy.data.objects) == names_before, "mesh names: object names restored")
+
+
 def test_load_repair(path, names_before, mesh_names):
     """Opens a file saved with the preview (replaces the session, so it runs last)."""
     print("[load repair]")
@@ -665,6 +778,7 @@ def main():
     test_bone_children(ctx, rig, names_before)
     test_extra_chains(ctx, rig, names_before, orig)
     test_checks(ctx, rig, names_before)
+    test_mesh_node_names(ctx, rig, names_before)
     test_load_repair(broken, names_before, [m.name for m in meshes])
 
     print("\nRESULT:", "PASS" if not failures else f"{len(failures)} FAILURE(S)")

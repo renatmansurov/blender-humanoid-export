@@ -6,6 +6,13 @@ follows [Semantic Versioning](https://semver.org/).
 
 ## [0.4.2]
 
+### Fixed
+
+- A character mesh named like a bone (for example `head`) made Unity reject the Humanoid avatar
+  ("Ambiguous Transform"). That mesh is exported as `head_mesh`, or as `head_00_mesh`,
+  `head_01_mesh` and so on when that name is already taken. The scene and the animation clips are
+  unchanged.
+
 ### Changed
 
 - Export no longer warns once per optional bone the rig does not have, such as a missing spine

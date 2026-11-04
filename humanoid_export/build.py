@@ -184,6 +184,50 @@ def _claim_name(name):
         holder.name = name + "__csc_src"
 
 
+def _free_mesh_name(name, taken):
+    """First export name for a mesh called ``name`` that is not in ``taken``.
+
+    A free name is kept. A clash becomes ``name_mesh``, then ``name_00_mesh``, ``name_01_mesh``
+    and so on, with at least two digits (``name_100_mesh`` follows 99). A number that is already
+    taken is skipped.
+    """
+    if name not in taken:
+        return name
+    candidate = f"{name}_mesh"
+    if candidate not in taken:
+        return candidate
+    number = 0
+    while True:
+        candidate = f"{name}_{number:02d}_mesh"
+        if candidate not in taken:
+            return candidate
+        number += 1
+
+
+def _mesh_export_names(objects, reserved):
+    """Object -> name of its export copy.
+
+    ``reserved`` is ``root``, the exported bone names and, as names are given out, the names of
+    the other export meshes. Meshes whose names are free are assigned first, so a mesh called
+    ``head_mesh`` keeps that name and a mesh called ``head`` continues at ``head_00_mesh``.
+    Unity Humanoid rejects an avatar when a mesh transform and the bone it is mapped to share a
+    name (``head`` and ``root/pelvis/.../head``).
+    """
+    taken = set(reserved)
+    names = {}
+    pending = []
+    for ob in objects:
+        if ob.name not in taken:
+            names[ob] = ob.name
+            taken.add(ob.name)
+        else:
+            pending.append(ob)
+    for ob in pending:
+        names[ob] = _free_mesh_name(ob.name, taken)
+        taken.add(names[ob])
+    return names
+
+
 def _ensure_object_mode(context):
     if context.mode != 'OBJECT' and context.active_object is not None:
         bpy.ops.object.mode_set(mode='OBJECT')
@@ -395,16 +439,21 @@ def _apply_modifiers(context, ob, warnings):
         m.show_viewport = True
 
 
-def _copy_mesh(context, src, rig, arm, collection, scale, warnings, world=None):
-    """Copies ``src`` into the export armature's space; ``world`` replaces its world matrix (see
-    _rest_world())."""
-    name = src.name
-    _claim_name(name)
+def _copy_mesh(context, src, rig, arm, collection, scale, warnings, export_name, world=None):
+    """Copies ``src`` into the export armature's space under ``export_name``.
+
+    ``world`` replaces its world matrix (see _rest_world()). ``export_name`` differs from the
+    source name when that name is already ``root`` or an exported bone or mesh (see
+    _mesh_export_names()). The source object then keeps its name; clear() still restores any
+    other object renamed to free ``export_name``.
+    """
+    _claim_name(export_name)
     me = src.data.copy()
     ob = src.copy()
     ob.data = me
-    ob.name = name
-    del ob[ORIGINAL_NAME_PROP]
+    ob.name = export_name
+    if ob.get(ORIGINAL_NAME_PROP) is not None:
+        del ob[ORIGINAL_NAME_PROP]
     ob[TMP_PROP] = True
     ob.animation_data_clear()
     ob.constraints.clear()
@@ -469,15 +518,19 @@ def build(context, rig, keep_face=True, unit_scale=1.0, meshes=True, extra_chain
         context.view_layer.update()
         return result
     bone_target = _weight_targets(rig, plan, profile.aliases, result.warnings)
-    for src in sources:
-        ob = _copy_mesh(context, src, rig, result.armature, collection, scale, result.warnings)
+    export_names = _mesh_export_names([*sources, *children], {mapping.ROOT_NAME, *plan})
+    # Free names are copied first. A later rename then cannot claim the object name a mesh that
+    # keeps its own name still holds.
+    for src in sorted(sources, key=lambda ob: export_names[ob] != ob.name):
+        ob = _copy_mesh(context, src, rig, result.armature, collection, scale, result.warnings,
+                        export_names[src])
         _remap_weights(ob, bone_target, list(plan))
         result.meshes.append(ob)
     source_target = _source_targets(plan, profile.aliases)
-    for src in children:
+    for src in sorted(children, key=lambda ob: export_names[ob] != ob.name):
         target, _ = _bone_child_target(src, rig, plan, bone_target, source_target)
         ob = _copy_mesh(context, src, rig, result.armature, collection, scale, result.warnings,
-                        world=_rest_world(src))
+                        export_names[src], world=_rest_world(src))
         _rigid_skin(ob, target, list(plan), result.armature)
         result.meshes.append(ob)
     context.view_layer.update()
