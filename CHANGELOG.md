@@ -4,7 +4,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 follows [Semantic Versioning](https://semver.org/).
 
-## [0.4.2]
+## [0.4.3]
 
 ### Fixed
 
@@ -12,6 +12,8 @@ follows [Semantic Versioning](https://semver.org/).
   ("Ambiguous Transform"). That mesh is exported as `head_mesh`, or as `head_00_mesh`,
   `head_01_mesh` and so on when that name is already taken. The scene and the animation clips are
   unchanged.
+
+## [0.4.2]
 
 ### Changed
 
