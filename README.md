@@ -156,6 +156,9 @@ How keys are baked:
   lower lip, tongue) go to `jaw`, the rest to `head`.
 - Meshes parented to a bone are placed where they are in the rig's rest pose and skinned with
   weight 1 to one export bone (e.g. eyes parented to `ORG-eye.L` → `eye_l`).
+- A mesh object whose name matches `root` or an exported bone is renamed in the FBX, so Unity
+  Humanoid can create the avatar. `head` becomes `head_mesh`, or `head_00_mesh`, `head_01_mesh`
+  and so on when that name is already an exported bone or mesh. The scene is not changed.
 - Not transferred: B-Bone curvature (FBX/Unity have none — every bone is straight).
 - If the merged weights of a vertex exceed 1, that vertex's weights are normalized (otherwise
   Blender would clamp them to 1 and distort proportions; deformation is unchanged).

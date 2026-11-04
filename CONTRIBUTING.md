@@ -107,7 +107,9 @@ frame are restored after export. If the file has no animation, a synthetic one i
 temporarily. Action selection: an action another armature plays is not listed, an unticked action
 is not exported, the action's manual frame range is used, nothing ticked is reported. Meshes
 parented to a bone (the hand's deform bone and the control the head follows) are exported with
-weight 1 on the right bone, keep their rest position and follow the bone. With Keep Extra Chains:
+weight 1 on the right bone, keep their rest position and follow the bone. A mesh named `head`
+exports as `head_mesh`, or as `head_00_mesh` when `head_mesh` is already used, with no duplicate
+FBX transform names and the source names restored. With Keep Extra Chains:
 no face or helper bones among the extras, mapped bones keep their parents, weight sums are
 preserved, the posed mesh matches, the extras are baked with the rig's rotation and are in the
 character and clip FBX. Also checked: the panel's pre-export checks, that saving with the preview built writes
