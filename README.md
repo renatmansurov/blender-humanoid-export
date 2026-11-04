@@ -80,9 +80,11 @@ otherwise to the nearest export bone by position, which the panel reports.
 
 The panel checks the setup while you work and, only when something is wrong, lists it above the
 export buttons: errors the export would stop on (unsupported rig, no visible meshes, no animation,
-no actions ticked, NLA tweak mode, no output folder) and warnings about what would be lost (shape
-keys dropped by a modifier, hidden meshes, bones the rig does not have, a rig animated as an
-object). When an export reports several warnings, they are also shown together in a popup.
+no actions ticked, NLA tweak mode, no output folder), and warnings about what would be lost or
+approximated (shape keys dropped by a modifier, deform weights merged onto the nearest bone, a rig
+animated as an object, bone translation the clip drops). Bones the rig does not have, and hidden
+meshes, are listed for information. When an export reports several warnings, they are also shown
+together in a popup.
 
 ### Animation (Unity)
 

@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 follows [Semantic Versioning](https://semver.org/).
 
+## [0.4.2]
+
+### Changed
+
+- Export no longer warns once per optional bone the rig does not have, such as a missing spine
+  bone or finger. The panel still lists those bones. A bone built from only some of its source
+  bones, deform weights merged onto the nearest bone, and dropped bone translation are still
+  warnings.
+
 ## [0.4.1]
 
 ### Changed
