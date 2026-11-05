@@ -777,6 +777,7 @@ def main():
     test_animation(ctx, rig, names_before)
     test_bone_children(ctx, rig, names_before)
     test_extra_chains(ctx, rig, names_before, orig)
+    test_facial_joints(ctx, rig, names_before, orig)
     test_checks(ctx, rig, names_before)
     test_mesh_node_names(ctx, rig, names_before)
     test_load_repair(broken, names_before, [m.name for m in meshes])
@@ -986,6 +987,122 @@ def test_extra_chains(ctx, rig, names_before, orig):
         (settings.keep_extra_chains, settings.filepath, settings.anim_dir, settings.anim_source,
          settings.anim_fps) = saved
     check(sorted(o.name for o in bpy.data.objects) == names_before, "extras: object names restored")
+
+
+def test_facial_joints(ctx, rig, names_before, orig):
+    """Export Facial Joints: face deform bones stay joints instead of merging into head or jaw."""
+    print("[facial joints]")
+    profile = M.detect(rig)
+    scene = ctx.scene
+    plan = B._plan_skeleton(rig, True, [])
+    mapped = {s for sources, _ in plan.values() for s in sources}
+    face_bones = [b.name for b in rig.data.bones if b.use_deform and profile.face(b) and b.name not in mapped]
+    print(f"  {len(face_bones)} facial deform bone(s) besides jaw and eyes")
+
+    # Jaw and eyes are facial too. With Keep Jaw & Eyes off they join this set under their source names.
+    without_jaw = B._plan_skeleton(rig, False, [])
+    with_jaw = B._plan_facial(rig, without_jaw, profile, [])
+    jaw_sources = [s for s in ("jawbone.x", "DEF-jaw", "DEF-jaw.master", "c_eye.l", "c_eye.r",
+                               "DEF-eye.L", "DEF-eye.R")
+                   if s in rig.data.bones and rig.data.bones[s].use_deform and s not in
+                   {n for sources, _ in without_jaw.values() for n in sources}]
+    exported_sources = {sources[0] for sources, _ in with_jaw.values()}
+    missing_jaw = [s for s in jaw_sources if s not in exported_sources]
+    check(not missing_jaw, f"jaw and eyes are facial joints when Keep Jaw & Eyes is off {missing_jaw}")
+
+    both = dict(plan)
+    facial = B._plan_facial(rig, both, profile, [])
+    both.update(facial)
+    extras = B._plan_extras(rig, both, profile, [])
+    overlap = [t for t in extras if profile.face(rig.data.bones[extras[t][0][0]])]
+    check(not overlap, f"Keep Extra Chains still leaves facial joints out {overlap[:5]}")
+
+    result = B.build(ctx, rig, keep_face=True, facial_joints=True)
+    arm, kept = result.armature, result.facial
+    for w in result.warnings:
+        print("  warn", w)
+    check(len(arm.data.bones) == len(plan) + len(kept),
+          f"{len(plan)} + {len(kept)} facial joints ({len(arm.data.bones)})")
+    got_sources = {result.plan[t][0][0] for t in kept}
+    check(got_sources == set(face_bones), f"every other facial deform bone is exported "
+                                           f"({sorted(set(face_bones) - got_sources)[:5]})")
+    moved = [t for t, (_, parent) in plan.items()
+             if (arm.data.bones[t].parent.name if arm.data.bones[t].parent else None) != parent]
+    check(not moved, f"mapped bones keep their parents {moved[:5]}")
+    orphans = [t for t in kept if arm.data.bones[t].parent is None]
+    check(not orphans, f"every facial joint has a parent {orphans[:5]}")
+    # The joint hangs off the bone its weights used to merge into, possibly through other face joints.
+    merged_into = {"DEF-lip.B.L": "jaw", "DEF-chin": "jaw", "DEF-tongue": "jaw",
+                   "DEF-lip.T.L": "head", "DEF-brow.T.L": "head"}
+    kept_names = set(kept)
+    for name, ancestor in merged_into.items():
+        target = next((t for t in kept if result.plan[t][0][0] == name), None)
+        if target is None or ancestor not in arm.data.bones:
+            continue
+        parent = arm.data.bones[target].parent
+        while parent is not None and parent.name in kept_names:
+            parent = parent.parent
+        got = None if parent is None else parent.name
+        check(got == ancestor, f"{name} hangs off {ancestor} ({got})")
+    bone_target = B._weight_targets(rig, result.plan, profile.aliases, [])
+    leaked = [n for n in face_bones if bone_target.get(n) in ("head", "jaw")]
+    check(not leaked, f"facial weights stay on the facial joints {leaked[:5]}")
+    targets = {b.name for b in arm.data.bones}
+    for ob in result.meshes:
+        _, sums = orig[ob.name]
+        new_sums = deform_weight_sums(ob, targets)
+        max_w = max(abs(b - (1.0 if a > 1.0 and abs(b - 1.0) < 1e-4 else a)) for a, b in zip(sums, new_sums))
+        check(max_w < 1e-4, f"facial: {ob.name} weight sums preserved (max {max_w:.2e})")
+    reported = C.character(ctx, rig, True, False, True)
+    mentions = any("Facial joints kept" in text for _, text in reported)
+    check(mentions == bool(face_bones), f"panel lists facial joints ({mentions}, {len(face_bones)} bones)")
+    srcs = {m[B.ORIGINAL_NAME_PROP]: m for m in bpy.data.objects
+            if m.get(B.ORIGINAL_NAME_PROP) and not m.get(B.TMP_PROP)}
+    synthetic_pose(ctx, rig, result, srcs, label="facial posed")
+
+    anim_rig = A.find_animated_rig(rig, rig)
+    start, end = scene.frame_start, scene.frame_end
+    with A.use_action(ctx, anim_rig, None):
+        A.bake(ctx, result, start, end, "bake_facial")
+    roots = {t for t, (_, parent) in result.plan.items() if parent is None}
+    if kept:
+        for frame in sorted({start, end}):
+            scene.frame_set(frame)
+            _, max_rot, _ = baked_pose_error(result, roots, kept)
+            check(max_rot < 0.01, f"frame {frame}: facial joints baked with the rig's rotation ({max_rot:.4f} deg)")
+    B.clear(ctx)
+
+    if not face_bones:
+        check(sorted(o.name for o in bpy.data.objects) == names_before, "facial: object names restored")
+        return
+
+    settings = scene.csc_export
+    saved = (settings.export_facial_joints, settings.keep_face, settings.filepath, settings.anim_dir,
+             settings.anim_source, settings.anim_fps)
+    out = os.path.join(OUT_DIR, "facial")
+    os.makedirs(out, exist_ok=True)
+    settings.export_facial_joints = True
+    settings.keep_face = True
+    settings.filepath = os.path.join(out, "facial_export.fbx")
+    settings.anim_dir, settings.anim_source, settings.anim_fps = out, 'ACTIVE', 0
+    ctx.view_layer.objects.active = rig
+    try:
+        check(bpy.ops.humanoid.export_character() == {'FINISHED'}, "facial: character export finished")
+        clip = os.path.join(out, humanoid_export._anim_filename(A.active_clip_name(anim_rig)))
+        check(bpy.ops.humanoid.export_animation() == {'FINISHED'}, "facial: animation export finished")
+        character = fbx_anim_summary(settings.filepath)
+        info = fbx_anim_summary(clip)
+        bones = set(info["parents"]) - {"root", E.BIND_POSE_MESH}
+        check(set(kept) <= set(character["parents"]) and set(kept) <= bones,
+              "facial: facial joints in the character and the clip FBX")
+        diff = {n for n in bones if info["parents"][n] != character["parents"].get(n)}
+        check(not diff, f"facial: clip hierarchy matches the character FBX {sorted(diff)[:5]}")
+        check(info["moving"] <= {"pelvis"}, f"facial: only pelvis translation animated {sorted(info['moving'])[:5]}")
+        check(not (bones - info["bind_pose"]), "facial: bind pose covers every bone")
+    finally:
+        (settings.export_facial_joints, settings.keep_face, settings.filepath, settings.anim_dir,
+         settings.anim_source, settings.anim_fps) = saved
+    check(sorted(o.name for o in bpy.data.objects) == names_before, "facial: object names restored")
 
 
 main()

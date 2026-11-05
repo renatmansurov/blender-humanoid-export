@@ -19,6 +19,8 @@ and bakes animation clips for Unity. See [README.md](README.md) for supported wo
 ## Repository layout
 
 ```
+batch_export.py          Bakes the current timeline of every .blend in a folder to animation FBX.
+batch_export.sh          Finds Blender and runs batch_export.py. See README, Batch export.
 humanoid_export/         The add-on itself (a Blender extension). Everything in here ships in the zip.
   blender_manifest.toml  Extension manifest: id, version, Blender version, license, permissions.
   __init__.py            UI panel, properties, operators, register/unregister.
@@ -112,7 +114,10 @@ exports as `head_mesh`, or as `head_00_mesh` when `head_mesh` is already used, w
 FBX transform names and the source names restored. With Keep Extra Chains:
 no face or helper bones among the extras, mapped bones keep their parents, weight sums are
 preserved, the posed mesh matches, the extras are baked with the rig's rotation and are in the
-character and clip FBX. Also checked: the panel's pre-export checks, that saving with the preview built writes
+character and clip FBX. With Export Facial Joints: every other facial deform bone is its own
+joint under the bone its weights used to merge into, jaw and eyes join that set when Keep Jaw &
+Eyes is off, weight sums are preserved, the joints are baked with the rig's rotation and are in
+the character and clip FBX. Also checked: the panel's pre-export checks, that saving with the preview built writes
 the source names, and that a file saved with a preview is repaired when opened (the copies are
 written to `out_dir`; the character .blend itself is never saved).
 

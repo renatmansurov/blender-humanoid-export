@@ -39,7 +39,9 @@ def _spread_torso(torso):
 # mapped ancestor to give their weights to.
 # merged(bone) -> whether an unmapped deform bone is always merged into its ancestor, even when
 # extra deform chains are kept (face, finger bases, helper bones).
-Profile = namedtuple("Profile", "name signature entries reversed aliases merged")
+# face(bone) -> whether ``bone`` is a facial deform bone. Export Facial Joints keeps these as
+# their own joints; Keep Extra Chains still does not, because merged() stays true for them.
+Profile = namedtuple("Profile", "name signature entries reversed aliases merged face")
 
 
 # --- Auto-Rig Pro ---------------------------------------------------------------------------
@@ -102,21 +104,27 @@ def _arp_entries(rig, keep_face=True):
     return result + _arp_side("l") + _arp_side("r")
 
 
-# ARP facial module bones; with Keep Jaw & Eyes only jaw and eyes are kept, the rest is merged.
+# ARP facial module bones. Keep Jaw & Eyes maps jaw and eyes; the rest is merged unless
+# Export Facial Joints is on.
 ARP_FACE = ("c_lips_", "c_eye", "c_nose_", "c_chin_", "c_cheek_", "c_teeth_", "tong_", "c_tong_",
             "c_ear_", "c_bingl", "c_jaw", "jawbone")
+
+
+def _arp_is_face(bone):
+    return bone.name.startswith(ARP_FACE)
 
 
 def _arp_merged(bone):
     # Finger *_base bones belong to the hand; extra twist and *_bend bones are segment helpers.
     name = bone.name
-    return name.startswith(ARP_FACE) or "_base." in name or "twist" in name or "_bend" in name
+    return _arp_is_face(bone) or "_base." in name or "twist" in name or "_bend" in name
 
 
 # ARP's c_root_bend.x starts at the spine base and points down to the hips; reversed, the pelvis
 # joint sits at hip level below spine_01 instead of on top of it, which Cascadeur needs to get a
 # defined pelvis direction.
-ARP = Profile("Auto-Rig Pro", ARP_SIGNATURE, _arp_entries, {"pelvis"}, lambda source: (), _arp_merged)
+ARP = Profile("Auto-Rig Pro", ARP_SIGNATURE, _arp_entries, {"pelvis"}, lambda source: (), _arp_merged,
+              _arp_is_face)
 
 
 # --- Rigify ---------------------------------------------------------------------------------
@@ -258,18 +266,26 @@ RIGIFY_FACE = {"face", "forehead", "temple", "brow", "lid", "ear", "lip", "lips"
                "cheek", "nose", "nostril", "teeth", "eye", "eyes"}
 
 
-def _rigify_merged(bone):
-    # Palm bones belong to the hand, DEF-pelvis.L/R to the hips. Face bones are recognised by name
-    # and, in a generated rig, by hanging off ORG-face.
+def _rigify_is_face(bone):
+    # By name (DEF-lip.T.L, DEF-brow.B.L, DEF-jaw_master, ...) and, in a generated rig, by hanging
+    # off ORG-face.
     name = bone.name
-    if name.startswith(("DEF-palm", "DEF-pelvis")):
-        return True
     if name.startswith("DEF-") and re.split(r"[._]", name[4:])[0].lower() in RIGIFY_FACE:
         return True
     return any(p.name in ("ORG-face", "face") for p in bone.parent_recursive)
 
 
-RIGIFY = Profile("Rigify", RIGIFY_SIGNATURE, _rigify_entries, set(), _rigify_aliases, _rigify_merged)
+def _rigify_merged(bone):
+    # Palm bones belong to the hand, DEF-pelvis.L/R to the hips. Face bones stay merged for
+    # Keep Extra Chains; Export Facial Joints uses _rigify_is_face instead.
+    name = bone.name
+    if name.startswith(("DEF-palm", "DEF-pelvis")):
+        return True
+    return _rigify_is_face(bone)
+
+
+RIGIFY = Profile("Rigify", RIGIFY_SIGNATURE, _rigify_entries, set(), _rigify_aliases, _rigify_merged,
+                 _rigify_is_face)
 
 PROFILES = (ARP, RIGIFY)
 

@@ -11,7 +11,7 @@ objects exist; ``clear()`` restores them.
 from collections import defaultdict
 
 import bpy
-from mathutils import Matrix
+from mathutils import Matrix, Vector
 from mathutils.geometry import intersect_point_line
 
 from . import mapping
@@ -35,7 +35,9 @@ class Build:
         self.meshes = []
         self.bone_count = 0
         self.warnings = []
-        # Targets built from extra deform chains (see _plan_extras()).
+        # Targets built from facial deform bones (see _plan_facial()) and from extra deform chains
+        # (see _plan_extras()).
+        self.facial = []
         self.extras = []
         # What anim.bake() needs: the deform rig, its plan, the unit scale and the rig's world
         # matrix the skeleton was built from.
@@ -146,34 +148,45 @@ def _source_targets(plan, aliases):
     return source_target
 
 
-def _plan_extras(rig, plan, profile, warnings):
-    """Extra deform chains (tail, hair, skirt, cape): every unmapped deform bone the profile does
-    not merge on purpose becomes a target of its own, named like the source bone. Returns
-    {target: ([source], parent target)} in parent-first order; each one hangs off the target of
-    its nearest exported ancestor, or off the nearest target by position if it has none."""
+def _plan_unmapped(rig, plan, profile, warnings, keep, kind):
+    """Deform bones ``keep`` accepts that are not already in ``plan`` become targets of their own,
+    named like the source bone. Returns {target: ([source], parent target)} in parent-first order.
+    Each one hangs off the target of its nearest exported ancestor, or off the nearest target by
+    position if it has none. ``kind`` names them in the orphan warning."""
     sources = {s for ss, _ in plan.values() for s in ss}
     source_target = _source_targets(plan, profile.aliases)
-    bones = sorted((b for b in rig.data.bones
-                    if b.use_deform and b.name not in sources and not profile.merged(b)),
+    bones = sorted((b for b in rig.data.bones if b.use_deform and b.name not in sources and keep(b)),
                    key=lambda b: len(b.parent_recursive))
-    extras = {}
+    added = {}
     orphans = []
     for b in bones:
         parent = next((source_target[p.name] for p in b.parent_recursive if p.name in source_target), None)
         if parent is None:
-            parent = _nearest_target(rig, {**plan, **extras}, b.head_local, b.tail_local)
+            parent = _nearest_target(rig, {**plan, **added}, b.head_local, b.tail_local)
             orphans.append(f"{b.name}->{parent}")
         target = b.name
-        while target in plan or target in extras:
+        while target in plan or target in added:
             target += "_extra"
-        extras[target] = ([b.name], parent)
+        added[target] = ([b.name], parent)
         for a in profile.aliases(b.name):
             source_target.setdefault(a, target)
         source_target[b.name] = target
     if orphans:
-        warnings.append(f"{len(orphans)} extra deform bone(s) without exported ancestor placed under "
+        warnings.append(f"{len(orphans)} {kind}(s) without exported ancestor placed under "
                         f"the nearest bone: {orphans[:5]}")
-    return extras
+    return added
+
+
+def _plan_facial(rig, plan, profile, warnings):
+    """Facial deform bones (lips, brows, cheeks, tongue, ears, and jaw or eyes when they are not
+    already mapped) become targets of their own. See _plan_unmapped()."""
+    return _plan_unmapped(rig, plan, profile, warnings, profile.face, "facial joint")
+
+
+def _plan_extras(rig, plan, profile, warnings):
+    """Extra deform chains (tail, hair, skirt, cape): every unmapped deform bone the profile does
+    not merge on purpose becomes a target of its own. Face bones stay out (see _plan_facial())."""
+    return _plan_unmapped(rig, plan, profile, warnings, lambda b: not profile.merged(b), "extra deform bone")
 
 
 def _claim_name(name):
@@ -249,7 +262,14 @@ def _build_armature(context, rig, plan, collection, scale, reversed_targets):
         for target, (sources, parent) in plan.items():
             first, last = bones[sources[0]], bones[sources[-1]]
             eb = data.edit_bones.new(target)
-            head, tail = mat @ first.head_local, mat @ last.tail_local
+            head_local, tail_local = first.head_local.copy(), last.tail_local.copy()
+            # A face bone can be zero-length. Blender then has no bone direction and align_roll fails.
+            if (tail_local - head_local).length_squared < 1e-10:
+                axis = Vector(first.matrix_local.col[1].xyz)
+                if axis.length_squared < 1e-16:
+                    axis = Vector((0.0, 1.0, 0.0))
+                tail_local = head_local + axis.normalized() * 0.001
+            head, tail = mat @ head_local, mat @ tail_local
             if target in reversed_targets:
                 head, tail = tail, head
             eb.head = head
@@ -480,10 +500,12 @@ def _copy_mesh(context, src, rig, arm, collection, scale, warnings, export_name,
     return ob
 
 
-def build(context, rig, keep_face=True, unit_scale=1.0, meshes=True, extra_chains=False):
+def build(context, rig, keep_face=True, unit_scale=1.0, meshes=True, extra_chains=False,
+          facial_joints=False):
     """``unit_scale`` multiplies all coordinates (100 = bake metres into centimetres).
     ``meshes=False`` builds the skeleton only, also for a rig that deforms no meshes.
-    ``extra_chains`` keeps unmapped deform chains as bones of their own (see _plan_extras())."""
+    ``facial_joints`` keeps facial deform bones as joints of their own (see _plan_facial()).
+    ``extra_chains`` keeps other unmapped deform chains as bones of their own (see _plan_extras())."""
     chosen = rig
     rig = find_deform_rig(rig, context.view_layer)
     profile = mapping.detect(rig)
@@ -500,6 +522,10 @@ def build(context, rig, keep_face=True, unit_scale=1.0, meshes=True, extra_chain
         raise BuildError(f"No visible meshes deformed by '{rig.name}'")
 
     plan = _plan_skeleton(rig, keep_face, result.warnings)
+    if facial_joints:
+        facial = _plan_facial(rig, plan, profile, result.warnings)
+        plan.update(facial)
+        result.facial = list(facial)
     if extra_chains:
         extras = _plan_extras(rig, plan, profile, result.warnings)
         plan.update(extras)
