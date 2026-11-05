@@ -4,6 +4,22 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 follows [Semantic Versioning](https://semver.org/).
 
+## [0.4.4]
+
+### Added
+
+- `batch_export.sh` bakes the current timeline of every single-character `.blend` in a folder
+  to an animation FBX. The output folder is `<name>_export` beside the input, or
+  `<name>_export_2`, `_3`, ... when that folder already exists. Usage is in the README.
+- `batch_export.py` flags `--face` / `--no-face`, `--jaweyes` / `--no-jaweyes` and
+  `--chains` / `--no-chains`. Facial joints and jaw and eyes are on by default; extra chains
+  stay off unless `--chains` is passed.
+- **Export Facial Joints** option (off by default). Facial deform bones other than the jaw and
+  eyes — lips, brows, cheeks, tongue, ears — are exported as their own joints under the head or
+  jaw, in the character and in the animation clips. Off, their weights are still merged into head
+  or jaw. Jaw and eyes still follow **Keep Jaw & Eyes**. Unity Humanoid clips need a Transform
+  mask to animate the extra joints, the same as extra chains.
+
 ## [0.4.3]
 
 ### Fixed

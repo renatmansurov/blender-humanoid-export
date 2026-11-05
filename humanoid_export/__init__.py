@@ -38,14 +38,23 @@ class CSC_Settings(bpy.types.PropertyGroup):
     keep_face: bpy.props.BoolProperty(
         name="Keep Jaw & Eyes",
         default=True,
-        description="Export jaw and eye bones; all other face bones are merged into head/jaw",
+        description=("Export jaw, eye_l and eye_r. Other face bones are merged into head or jaw "
+                     "unless Export Facial Joints is on"),
+    )
+    export_facial_joints: bpy.props.BoolProperty(
+        name="Export Facial Joints",
+        default=False,
+        description=("Export the other facial deform bones (lips, brows, cheeks, tongue, ears) as "
+                     "joints named like the source bones, under the head or jaw. Off merges their "
+                     "weights into head or jaw. Jaw and eyes still follow Keep Jaw & Eyes"),
     )
     keep_extra_chains: bpy.props.BoolProperty(
         name="Keep Extra Chains",
         default=False,
         description=("Export unmapped deform bones (tail, hair, skirt, cape) as extra bones under the "
-                     "nearest mapped bone instead of merging their weights into it. Face, finger base "
-                     "and helper bones are still merged"),
+                     "nearest mapped bone instead of merging their weights into it. Facial joints are "
+                     "exported only with Export Facial Joints. Finger base and helper bones are still "
+                     "merged"),
     )
     anim_source: bpy.props.EnumProperty(
         name="Animation",
@@ -184,7 +193,8 @@ class CSC_OT_export_character(bpy.types.Operator):
         mode = context.mode
         try:
             result = build_mod.build(context, rig, settings.keep_face, export_mod.centimetre_scale(context.scene),
-                                     extra_chains=settings.keep_extra_chains)
+                                     extra_chains=settings.keep_extra_chains,
+                                     facial_joints=settings.export_facial_joints)
             export_mod.export_fbx(context, filepath, result)
         except build_mod.BuildError as e:
             self.report({'ERROR'}, str(e))
@@ -230,7 +240,8 @@ class CSC_OT_export_animation(bpy.types.Operator):
         written = []
         try:
             result = build_mod.build(context, rig, settings.keep_face, export_mod.centimetre_scale(context.scene),
-                                     meshes=False, extra_chains=settings.keep_extra_chains)
+                                     meshes=False, extra_chains=settings.keep_extra_chains,
+                                     facial_joints=settings.export_facial_joints)
             fps = settings.anim_fps or None
             for name, action, start, end in clips:
                 with anim_mod.use_action(context, anim_rig, action):
@@ -263,7 +274,8 @@ class CSC_OT_build_preview(bpy.types.Operator):
             return {'CANCELLED'}
         settings = context.scene.csc_export
         try:
-            result = build_mod.build(context, rig, settings.keep_face, extra_chains=settings.keep_extra_chains)
+            result = build_mod.build(context, rig, settings.keep_face, extra_chains=settings.keep_extra_chains,
+                                     facial_joints=settings.export_facial_joints)
         except build_mod.BuildError as e:
             build_mod.clear(context)
             self.report({'ERROR'}, str(e))
@@ -353,10 +365,11 @@ class CSC_PT_panel(bpy.types.Panel):
             path = _resolve_filepath(context)
             layout.label(text=bpy.path.basename(path) if path else "Save the .blend first", icon='FILE')
         layout.prop(settings, "keep_face")
+        layout.prop(settings, "export_facial_joints")
         layout.prop(settings, "keep_extra_chains")
         if selected is not None:
             _draw_checks(layout, context, checks.safe(checks.character, context, selected, settings.keep_face,
-                                                      settings.keep_extra_chains))
+                                                      settings.keep_extra_chains, settings.export_facial_joints))
         layout.operator(CSC_OT_export_character.bl_idname, icon='EXPORT')
         row = layout.row(align=True)
         row.operator(CSC_OT_build_preview.bl_idname, icon='HIDE_OFF')

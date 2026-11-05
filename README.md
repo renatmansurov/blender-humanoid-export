@@ -54,16 +54,22 @@ To build the zip yourself, see [CONTRIBUTING.md](CONTRIBUTING.md#building).
   (whose bones follow the rig through constraints), the copy is used; the panel shows which rig and
   rig type are in use.
 - **File**: output FBX. Empty = `<blend name>_humanoid.fbx` next to the .blend.
-- **Keep Jaw & Eyes**: keep `jaw`, `eye_l`, `eye_r`; all other face bones are merged into
-  head/jaw.
+- **Keep Jaw & Eyes**: keep `jaw`, `eye_l`, `eye_r`. Other face bones are merged into head or jaw
+  unless **Export Facial Joints** is on.
+- **Export Facial Joints** (off by default): the other facial deform bones (lips, brows, cheeks,
+  tongue, ears, and jaw or eyes when **Keep Jaw & Eyes** is off) are exported as joints named like
+  the source bones. A joint stays under its parent face bone, or under `jaw` or `head` — the same
+  bone its weights used to merge into. The panel lists them. The names and paths of the Mannequin
+  bones stay the same, so Cascadeur's UE4_New template still matches. Unity Humanoid does not map
+  these joints; see [Unity](#unity), item 4.
 - **Keep Extra Chains** (off by default): deform bones that have no Mannequin counterpart (tail,
   hair, skirt, cape, Rigify `DEF-breast.*`, Auto-Rig Pro custom `cc_*` bones) are exported as extra
   bones under the nearest mapped bone, named like the source bone, instead of having their weights
-  merged into it. Face bones (other than jaw and eyes), finger base and palm bones, Rigify
-  `DEF-pelvis.*` and Auto-Rig Pro twist and `*_bend` helpers are still merged. The panel lists the
-  extra bones. They do not change the names or paths of the 55 bones, so Cascadeur's Quick Rigging
-  Tool template UE4_New still matches (it has no slots for the extras). For Unity see
-  [Unity](#unity), item 4.
+  merged into it. Facial joints are exported only with **Export Facial Joints**. Finger base and
+  palm bones, Rigify `DEF-pelvis.*` and Auto-Rig Pro twist and `*_bend` helpers are still merged.
+  The panel lists the extra bones. They do not change the names or paths of the 55 bones, so
+  Cascadeur's Quick Rigging Tool template UE4_New still matches (it has no slots for the extras).
+  For Unity see [Unity](#unity), item 4.
 - **Export Character**: run the export.
 - **Build Preview** / ✕: build the temporary skeleton and meshes in the `CSC_Export_TMP`
   collection for inspection / remove them. While the preview exists, the source objects are
@@ -88,8 +94,9 @@ together in a popup.
 
 ### Animation (Unity)
 
-The **Animation (Unity)** box in the same panel. The rig, **Keep Jaw & Eyes** and **Keep Extra
-Chains** are taken from above, so the skeleton is built exactly as for the model.
+The **Animation (Unity)** box in the same panel. The rig, **Keep Jaw & Eyes**, **Export Facial
+Joints** and **Keep Extra Chains** are taken from above, so the skeleton is built exactly as for
+the model.
 
 - **Current**: what the timeline plays now (the rig's active action or NLA), in the scene frame
   range. **All Actions**: the actions ticked in the list, each in its own range, one file per
@@ -133,14 +140,15 @@ How keys are baked:
 
 - Armature object `root` (at the origin) → `pelvis` → `spine_01..03` → `neck_01` → `head`
   (+ `jaw`, `eye_l/r`), arms `clavicle/upperarm/lowerarm/hand` + fingers
-  `thumb/index/middle/ring/pinky_01..03`, legs `thigh/calf/foot/ball`. 55 bones, plus the extra
-  chains with **Keep Extra Chains**.
+  `thumb/index/middle/ring/pinky_01..03`, legs `thigh/calf/foot/ball`. 55 bones, plus facial joints
+  with **Export Facial Joints**, plus the extra chains with **Keep Extra Chains**.
 - Auto-Rig Pro twist/stretch segments are merged into one bone per segment, spine bend bones become
   `spine_*`, finger `*_base` bones are merged into `hand`. Weights of unmapped deform bones go to
   the nearest mapped ancestor; if there is none (the bone hangs off a non-deform control), they go
-  to the closest export bone by position, with a warning. With **Keep Extra Chains** the bones
-  that are not merged on purpose (see above) become bones of their own instead; an extra bone
-  without an exported ancestor is placed under the closest export bone, with a warning.
+  to the closest export bone by position, with a warning. With **Export Facial Joints** each
+  remaining facial deform bone becomes a joint of its own instead. With **Keep Extra Chains** the
+  other bones that are not merged on purpose (see above) become bones of their own; a bone without
+  an exported ancestor is placed under the closest export bone, with a warning.
 - Auto-Rig Pro spine: 1–4+ `c_spine_NN_bend.x` bones. The first → `spine_01`, the last →
   `spine_03`, the middle ones are merged into `spine_02` (with three, one to one).
 - Rigify: works on both the generated rig and its deform copy. `DEF-*` bones are used; where a
@@ -153,7 +161,8 @@ How keys are baked:
   `spine_03` is absent — QRT UE4_New still fills all slots), then the neck (several bones are
   merged into `neck_01`) and the head (`*head*` or the last `DEF-spine.NNN`). Jaw/eyes:
   `DEF-jaw`, `DEF-eye.L/R` (or `ORG-eye.L/R`) if present. Face bones under `jaw_master` (chin,
-  lower lip, tongue) go to `jaw`, the rest to `head`.
+  lower lip, tongue) go to `jaw`, the rest to `head`. With **Export Facial Joints** those bones are
+  kept and parented there instead of being merged.
 - Meshes parented to a bone are placed where they are in the rig's rest pose and skinned with
   weight 1 to one export bone (e.g. eyes parented to `ORG-eye.L` → `eye_l`).
 - A mesh object whose name matches `root` or an exported bone is renamed in the FBX, so Unity
@@ -193,16 +202,42 @@ How keys are baked:
    Animator for root motion. If the character turns during the clip, the turn is root rotation:
    with Bake Into Pose off and Apply Root Motion off it is lost. Unity may report that some bones
    have scale animation that will be discarded: that is float rounding noise, harmless.
-4. Extra chains (**Keep Extra Chains**) in Unity: Humanoid does not map them, and a Humanoid clip
-   only imports their curves when its Animation tab has a Mask whose Transform list includes them
-   (Mask → Definition: *Copy From Other* with an Avatar Mask made from the model). Without one the
-   tail or hair stays in its rest pose. Check the model's avatar in *Configure Avatar*: when the
-   character has no eye bones, or they have no weights, Unity's auto-mapping may put an extra bone
-   under the head into an eye slot; clear it there.
+4. Extra chains (**Keep Extra Chains**) and facial joints (**Export Facial Joints**) in Unity:
+   Humanoid does not map them, and a Humanoid clip only imports their curves when its Animation tab
+   has a Mask whose Transform list includes them (Mask → Definition: *Copy From Other* with an
+   Avatar Mask made from the model). Without one the tail, hair or face stays in its rest pose.
+   Check the model's avatar in *Configure Avatar*: when the character has no eye bones, or they
+   have no weights, Unity's auto-mapping may put an extra bone under the head into an eye slot;
+   clear it there. Lips and brows are especially likely to be grabbed when facial joints are
+   exported.
 
 Animation limitations: avoid animating the rig at the object level (moving the root control),
 otherwise the skeleton's rest pose depends on the frame the export is built on. Facial animation
-other than jaw and eyes is lost, as in the model export.
+other than jaw and eyes is lost unless **Export Facial Joints** is on, as in the model export.
+
+## Batch export
+
+`batch_export.sh` bakes the current timeline of every single-character `.blend` in a folder to an
+animation FBX. Meshes are not exported, and the source files are not saved.
+
+```
+batch_export.sh <input folder> [<output folder>] [--no-face] [--no-jaweyes] [--chains]
+```
+
+The FBX folder is created beside the input as `<name>_export`. When that folder already exists,
+the next run uses `<name>_export_2`, `<name>_export_3` and so on. Pass a second folder to choose
+the path. Blender is taken from `$BLENDER`, then `blender` on `PATH`, then Blender.app on macOS.
+The work itself is `batch_export.py`, which the shell script launches.
+
+A file is skipped unless it has exactly one visible armature with a visible skinned mesh. Each
+FBX, and the take inside it, is named after the `.blend`. The scene frame range is baked at 30
+fps, with NLA left on. One Blender process per file, so one failure does not stop the rest.
+Lines starting with `BATCH_OK`, `BATCH_SKIP` or `BATCH_FAIL` report each file; `BATCH_DONE`
+prints the totals.
+
+Facial joints and jaw and eyes are exported by default. `--no-face` merges lips, brows and the
+other face bones into the head or jaw. `--no-jaweyes` leaves out `jaw`, `eye_l` and `eye_r`.
+`--chains` also keeps extra deform chains such as a tail, hair, a skirt or a cape.
 
 ## Contributing
 

@@ -27,7 +27,7 @@ def _rigs(context, rig):
     return deform, anim_mod.find_animated_rig(rig, deform)
 
 
-def character(context, rig, keep_face=True, extra_chains=False):
+def character(context, rig, keep_face=True, extra_chains=False, facial_joints=False):
     """Checks for Export Character on the chosen (or resolved) armature ``rig``."""
     view_layer = context.view_layer
     deform = build_mod.find_deform_rig(rig, view_layer)
@@ -43,9 +43,14 @@ def character(context, rig, keep_face=True, extra_chains=False):
     skipped = [t for t, _, _ in mapping.entries(deform, keep_face) if t not in plan]
     if skipped:
         result.append(('INFO', f"Not in the rig, skipped: {_names(skipped)}"))
+    facial = build_mod._plan_facial(deform, plan, profile, warnings) if facial_joints else {}
+    if facial:
+        result.append(('INFO', f"Facial joints kept: {_names(facial)}"))
+        plan.update(facial)
     extras = build_mod._plan_extras(deform, plan, profile, warnings) if extra_chains else {}
     if extras:
         result.append(('INFO', f"Extra bones kept: {_names(extras)}"))
+        plan.update(extras)
     result += [('WARNING', w) for w in warnings]
 
     meshes = build_mod.find_meshes(deform, view_layer)
@@ -65,7 +70,6 @@ def character(context, rig, keep_face=True, extra_chains=False):
             result.append(('WARNING', f"'{ob.name}': shape keys lost, modifiers "
                                       f"{_names(m.name for m in dropping)} are applied"))
     if children:
-        plan.update(extras)
         bone_target = build_mod._weight_targets(deform, plan, profile.aliases, [])
         source_target = build_mod._source_targets(plan, profile.aliases)
         for ob in children:
