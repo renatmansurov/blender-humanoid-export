@@ -80,6 +80,10 @@ def character(context, rig, keep_face=True, extra_chains=False, facial_joints=Fa
     if build_mod.has_preview():
         result.append(('INFO', "Preview is built: the source objects stay renamed until it is "
                                "cleared (✕) or the file is saved"))
+    props = build_mod.find_prop_armatures(rig, view_layer)
+    if props:
+        result.append(('INFO', f"Prop armature(s) {_names(p.name for p in props)} are not included; "
+                               f"use Export to Unity"))
     return result
 
 
@@ -106,6 +110,37 @@ def animation(context, rig, source='ACTIVE', directory=None):
         if anim_mod.object_transform_animated(ob):
             result.append(('WARNING', f"'{ob.name}' is animated as an object: the skeleton uses its "
                                       f"transform at the current frame"))
+    return result
+
+
+def unity(context, rig, source='ACTIVE', directory=None):
+    """Checks for Export to Unity: which props are included, and which clips do not animate them."""
+    result = []
+    props = build_mod.find_prop_armatures(rig, context.view_layer)
+    if props:
+        for prop in props:
+            bones = [b.name for b in prop.data.bones if b.use_deform]
+            result.append(('INFO', f"Prop '{prop.name}': {_names(bones)}"))
+    else:
+        result.append(('INFO', "No separate prop armature; the character is exported on its own"))
+    deform, anim_rig = _rigs(context, rig)
+    if mapping.detect(deform) is None:
+        return result
+    if source == 'ACTIVE':
+        action = anim_rig.animation_data.action if anim_rig.animation_data else None
+        actions = [action] if action is not None else []
+        if props:
+            result.append(('INFO', "Current bakes each armature as the timeline evaluates it"))
+    else:
+        actions = anim_mod.rig_actions(anim_rig)
+    players = anim_mod._players()
+    for action in actions:
+        for prop in props:
+            if anim_mod.action_animates(action, prop, players) is None:
+                result.append(('WARNING', f"'{action.name}' has no animation for '{prop.name}'; "
+                                          f"the prop stays in its bind pose"))
+    if directory is None:
+        result.append(('ERROR', "Save the .blend first or set an animation folder"))
     return result
 
 

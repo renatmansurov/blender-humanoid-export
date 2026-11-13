@@ -644,6 +644,325 @@ def test_load_repair(path, names_before, mesh_names):
           f"source names restored on load ({sorted(names - set(names_before))[:5]})")
 
 
+def _action_slot(action, name):
+    slots = getattr(action, "slots", None)
+    # A new layered action has an empty slots collection, which is falsy but still the slot API.
+    if slots is None:
+        return None
+    try:
+        return slots.new('OBJECT', name)
+    except TypeError:
+        return slots.new(id_type='OBJECT', name=name)
+
+
+def _action_curve(action, slot, data_path, index):
+    if slot is None:
+        return action.fcurves.new(data_path, index=index)
+    layer = action.layers[0] if len(action.layers) else action.layers.new("Layer")
+    strip = layer.strips[0] if len(layer.strips) else layer.strips.new(type='KEYFRAME')
+    return strip.channelbag(slot, ensure=True).fcurves.new(data_path, index=index)
+
+
+def _key(action, slot, data_path, index, keys):
+    fc = _action_curve(action, slot, data_path, index)
+    for frame, value in keys:
+        fc.keyframe_points.insert(frame, value)
+
+
+def _fbx_channel_curves(path, channel):
+    """{model: [(min, max), ...]} for each curve of ``channel`` (an FBX property name, bytes).
+
+    A curve connects to an AnimationCurveNode, and that node connects to the model. Axes stay
+    separate: a constant euler (0, 0, 180) is three constant curves, not a 180 degree change."""
+    from io_scene_fbx import parse_fbx
+
+    root, _version = parse_fbx.parse(path)
+
+    def child(elem, eid):
+        return next((e for e in elem.elems if e.id == eid), None)
+
+    models = {}
+    curves = {}
+    for e in child(root, b"Objects").elems:
+        if e.id == b"Model":
+            models[e.props[0]] = e.props[1].split(b"\x00")[0].decode()
+        elif e.id == b"AnimationCurve":
+            values = child(e, b"KeyValueFloat").props[0]
+            curves[e.props[0]] = (min(values), max(values)) if len(values) else (0.0, 0.0)
+    nodes = {}
+    for c in child(root, b"Connections").elems:
+        if c.props[0] == b"OP" and c.props[2] in models and c.props[3] == channel:
+            nodes[c.props[1]] = models[c.props[2]]
+    found = {}
+    for c in child(root, b"Connections").elems:
+        if c.props[0] != b"OP" or c.props[1] not in curves or c.props[2] not in nodes:
+            continue
+        found.setdefault(nodes[c.props[2]], []).append(curves[c.props[1]])
+    return found
+
+
+def fbx_channel_bounds(path, channel):
+    """{model: (min, max)} across every curve of ``channel``."""
+    return {name: (min(lo for lo, _hi in pairs), max(hi for _lo, hi in pairs))
+            for name, pairs in _fbx_channel_curves(path, channel).items()}
+
+
+def fbx_channel_span(path, channel):
+    """{model: largest change of a single curve of ``channel``}."""
+    return {name: max(hi - lo for lo, hi in pairs)
+            for name, pairs in _fbx_channel_curves(path, channel).items()}
+
+
+def fbx_armature_parents(path):
+    """{bone or armature object: parent name or None} for the Null and LimbNode nodes.
+
+    Meshes are left out, so a model FBX and its skeleton clip can be compared bone for bone.
+    """
+    from io_scene_fbx import parse_fbx
+
+    root, _version = parse_fbx.parse(path)
+    objects = next(e for e in root.elems if e.id == b"Objects")
+    models = {}
+    for e in objects.elems:
+        if e.id == b"Model" and e.props[2] in (b"Null", b"LimbNode"):
+            models[e.props[0]] = e.props[1].split(b"\x00")[0].decode()
+    parents = {}
+    for c in next(e for e in root.elems if e.id == b"Connections").elems:
+        if c.props[0] == b"OO" and c.props[1] in models and (c.props[2] in models or c.props[2] == 0):
+            parents[models[c.props[1]]] = models.get(c.props[2])
+    return parents
+
+
+def test_unity_props(ctx, rig, names_before):
+    """A separate prop armature is on the Unity skeleton and clip, and absent from the Mannequin export.
+
+    The prop root's scale is constant, so it is part of the bind pose and not a scale curve. The
+    child bone rotates. A second action does not animate the prop and leaves it at that bind.
+    Export Facial Joints and Keep Extra Chains are on, and each clip's skeleton matches the model
+    so Unity Generic can use Copy From Other Avatar. A real chest action, when the file has one,
+    rotates the chest in that same skeleton.
+    """
+    print("[unity props]")
+    scene = ctx.scene
+    settings = scene.csc_export
+    arm_data = bpy.data.armatures.new("csc_prop_arm")
+    prop = bpy.data.objects.new("csc_prop_arm", arm_data)
+    mesh = None
+    created = []
+    saved_ticks = {a: a.csc_export for a in bpy.data.actions}
+    saved = (settings.filepath, settings.anim_dir, settings.anim_source, settings.anim_fps,
+             settings.export_facial_joints, settings.keep_extra_chains)
+    try:
+        ctx.scene.collection.objects.link(prop)
+        ctx.view_layer.objects.active = prop
+        bpy.ops.object.mode_set(mode='EDIT')
+        root = arm_data.edit_bones.new("csc_prop_root")
+        root.head, root.tail = (0.0, 0.0, 0.0), (0.0, 0.2, 0.0)
+        lid = arm_data.edit_bones.new("csc_prop_lid")
+        lid.head, lid.tail = (0.0, 0.2, 0.05), (0.0, 0.05, 0.05)
+        lid.parent = root
+        bpy.ops.object.mode_set(mode='OBJECT')
+        for pb in prop.pose.bones:
+            pb.rotation_mode = 'QUATERNION'
+        mesh = cube(ctx, "csc_prop_mesh", size=0.1)
+        mesh.parent = prop
+        mesh.vertex_groups.new(name="csc_prop_root").add(list(range(len(mesh.data.vertices))), 1.0, 'REPLACE')
+        mesh.modifiers.new("Armature", 'ARMATURE').object = prop
+
+        bone = next(b.name for b in rig.data.bones if b.use_deform)
+        take = bpy.data.actions.new("csc_prop_take")
+        still = bpy.data.actions.new("csc_prop_still")
+        created = [take, still]
+        for action in created:
+            character = _action_slot(action, "Billie")
+            _key(action, character, f'pose.bones["{bone}"].rotation_quaternion', 0, ((1, 1.0), (5, 1.0)))
+        prop_slot = _action_slot(take, "Chest")
+        for index, value in enumerate((0.0, 0.3, 0.1)):
+            _key(take, prop_slot, 'pose.bones["csc_prop_root"].location', index, ((1, value), (5, value)))
+        for index in range(3):
+            _key(take, prop_slot, 'pose.bones["csc_prop_root"].scale', index, ((1, 0.8), (5, 0.8)))
+        _key(take, prop_slot, 'pose.bones["csc_prop_lid"].rotation_quaternion', 1, ((1, 0.0), (5, 0.3)))
+        _action_slot(still, "Chest")
+        for action in bpy.data.actions:
+            action.csc_export = action in (take, still)
+
+        noted = C.character(ctx, rig, True)
+        check(any(level == 'INFO' and "csc_prop_arm" in text and "Export to Unity" in text
+                  for level, text in noted),
+              "panel says the prop armature is not in Export Character")
+        unity_notes = C.unity(ctx, rig, 'ALL', OUT_DIR)
+        check(any("csc_prop_root" in text and "csc_prop_lid" in text for _, text in unity_notes),
+              "panel lists the prop bones")
+        check(any(level == 'WARNING' and "csc_prop_still" in text and "csc_prop_arm" in text
+                  for level, text in unity_notes),
+              "panel warns that csc_prop_still does not animate the prop")
+
+        settings.filepath = ""
+        empty = humanoid_export._resolve_unity_filepath(ctx)
+        check(empty is not None and empty.endswith("_unity.fbx"), f"empty File uses _unity.fbx ({empty})")
+
+        out = os.path.join(OUT_DIR, "unity")
+        os.makedirs(out, exist_ok=True)
+        ctx.view_layer.objects.active = rig
+        settings.filepath = os.path.join(out, "mannequin.fbx")
+        check(bpy.ops.humanoid.export_character() == {'FINISHED'}, "unity props: mannequin export finished")
+        mannequin = fbx_model_names(settings.filepath)
+        check("csc_prop_root" not in mannequin and "csc_prop_mesh" not in mannequin,
+              "mannequin export leaves the prop out")
+
+        pb = prop.pose.bones["csc_prop_root"]
+        pb.rotation_mode = 'QUATERNION'
+        pb.rotation_quaternion = (1.0, 0.0, 0.0, 0.0)
+        pb.location = (0.0, 0.3, 0.1)
+        pb.scale = (0.8, 0.8, 0.8)
+        ctx.view_layer.update()
+        unit = E.centimetre_scale(scene)
+        result = B.build(ctx, rig, keep_face=True, unit_scale=unit, props=True)
+        try:
+            bones = result.armature.data.bones
+            check("csc_prop_root" in bones and "csc_prop_lid" in bones, "prop bones are on the export armature")
+            check(bones["csc_prop_root"].parent is None, "prop root hangs off the armature, beside pelvis")
+            check(bones["csc_prop_lid"].parent is not None and bones["csc_prop_lid"].parent.name == "csc_prop_root",
+                  "prop child keeps its parent")
+            expected = unit * (prop.matrix_world @ prop.pose.bones["csc_prop_root"].head)
+            # build() may have evaluated the duplicate, not this pose; the bind comes from the keys,
+            # which are this same pose. Compare the export bone to that.
+            got = bones["csc_prop_root"].head_local
+            check((got - expected).length < 0.05, f"prop root bind includes the constant location "
+                                                   f"({tuple(round(c, 2) for c in got)} vs "
+                                                   f"{tuple(round(c, 2) for c in expected)})")
+            copy = next((m for m in result.meshes if m.name == "csc_prop_mesh"), None)
+            src = next((o for o in bpy.data.objects if o.get(B.ORIGINAL_NAME_PROP) == "csc_prop_mesh"), mesh)
+            check(copy is not None, "prop mesh is in the build")
+            if copy is not None:
+                posed = [unit * c for c in world_coords(src, evaluated=True)]
+                exported = world_coords(copy)
+                dev = max((a - b).length for a, b in zip(posed, exported))
+                check(dev < 0.05, f"prop mesh matches the bind pose (max {dev:.3f} cm)")
+            anim_rig = A.find_animated_rig(rig, rig)
+            with A.use_action(ctx, anim_rig, take, [prop]):
+                baked = A.bake(ctx, result, 1, 5, "csc_prop_take")
+            paths = [fc.data_path for fc in A._fcurves(baked)]
+            check(not any(p.startswith('pose.bones["csc_prop_root"].scale') for p in paths),
+                  "baked take has no scale curve on the prop root")
+            lid = [fc for fc in A._fcurves(baked) if 'csc_prop_lid' in fc.data_path and fc.data_path.endswith("rotation_quaternion")]
+            span = max((max(kp.co[1] for kp in fc.keyframe_points) - min(kp.co[1] for kp in fc.keyframe_points)
+                        for fc in lid), default=0.0)
+            check(span > 0.1, f"baked take rotates the prop child ({span:.3f})")
+            with A.use_action(ctx, anim_rig, still, [prop]):
+                held = A.bake(ctx, result, 1, 5, "csc_prop_still", hold_bind=[prop])
+            held_paths = [fc.data_path for fc in A._fcurves(held)]
+            check(not any(p.startswith('pose.bones["csc_prop_root"].scale') for p in held_paths),
+                  "action without a prop slot does not bake prop scale")
+        finally:
+            B.clear(ctx)
+
+        settings.filepath = os.path.join(out, "chosen.fbx")
+        settings.anim_dir, settings.anim_source, settings.anim_fps = out, 'ALL', 0
+        settings.export_facial_joints = True
+        settings.keep_extra_chains = True
+        # Actions that animate the file's own chest, when this blend has them. The synthetic
+        # actions above do not, so the chest stays in its bind pose for those clips.
+        for chest_action in (bpy.data.actions.get("open_chest"), bpy.data.actions.get("fail")):
+            if chest_action is not None and chest_action.library is None:
+                chest_action.csc_export = True
+        ctx.view_layer.objects.active = rig
+        check(bpy.ops.humanoid.export_unity() == {'FINISHED'}, "unity export finished")
+        check(os.path.isfile(settings.filepath), "unity model written to the chosen File")
+        model = fbx_anim_summary(settings.filepath)
+        check(model["parents"].get("csc_prop_root") == "root", "FBX prop root is parented to root")
+        check(model["parents"].get("csc_prop_lid") == "csc_prop_root", "FBX prop child parent is the prop root")
+        check("csc_prop_mesh" in model["parents"], "FBX contains the prop mesh")
+
+        take_path = os.path.join(out, humanoid_export._unity_anim_filename("csc_prop_take"))
+        still_path = os.path.join(out, humanoid_export._unity_anim_filename("csc_prop_still"))
+        check(os.path.isfile(take_path) and os.path.isfile(still_path), "both unity clips written")
+        if os.path.isfile(take_path):
+            rotation = fbx_channel_span(take_path, b"Lcl Rotation")
+            scaling = fbx_channel_bounds(take_path, b"Lcl Scaling").get("csc_prop_root", (1.0, 1.0))
+            lid_rot = rotation.get("csc_prop_lid", 0.0)
+            check(lid_rot > 5.0, f"clip rotates the prop child ({lid_rot:.2f})")
+            check(abs(scaling[0] - 1.0) < 1e-2 and abs(scaling[1] - 1.0) < 1e-2,
+                  f"prop root scale stays 1 ({scaling})")
+            clip = fbx_anim_summary(take_path)
+            check(clip["parents"].get("csc_prop_lid") == model["parents"].get("csc_prop_lid"),
+                  "clip prop hierarchy matches the model")
+        if os.path.isfile(still_path):
+            scaling = fbx_channel_bounds(still_path, b"Lcl Scaling").get("csc_prop_root", (1.0, 1.0))
+            rotation = fbx_channel_span(still_path, b"Lcl Rotation").get("csc_prop_lid", 0.0)
+            check(abs(scaling[0] - 1.0) < 1e-2 and abs(scaling[1] - 1.0) < 1e-2,
+                  f"action without a prop slot does not scale the prop ({scaling})")
+            check(rotation < 1e-2, f"action without a prop slot leaves the child at rest ({rotation:.4f})")
+
+        model_bones = fbx_armature_parents(settings.filepath)
+        check("csc_prop_root" in model_bones and "csc_prop_lid" in model_bones,
+              "model skeleton includes the prop with facial joints and extra chains on")
+        for clip_name in ("csc_prop_take", "csc_prop_still", "open_chest", "fail"):
+            clip_path = os.path.join(out, humanoid_export._unity_anim_filename(clip_name))
+            if not os.path.isfile(clip_path):
+                continue
+            bones = fbx_armature_parents(clip_path)
+            missing = sorted(set(model_bones) - set(bones))
+            extra = sorted(set(bones) - set(model_bones))
+            check(not missing and not extra,
+                  f"{clip_name}: clip skeleton matches the model (missing {missing[:5]}, extra {extra[:5]})")
+            diff = sorted(n for n in set(model_bones) & set(bones) if model_bones[n] != bones[n])
+            check(not diff, f"{clip_name}: bone parents match the model {diff[:5]}")
+            info = fbx_anim_summary(clip_path)
+            uncovered = (set(bones) - {"root"}) - info["bind_pose"]
+            check(not uncovered, f"{clip_name}: bind pose covers every bone (missing {sorted(uncovered)[:5]})")
+            lcl_diff = [n for n in bones if any(
+                abs(a - b) > 1e-3 for x, y in zip(info["lcl"].get(n, ()), model["lcl"].get(n, ()))
+                for a, b in zip(x, y))]
+            check(not lcl_diff, f"{clip_name}: rest pose matches the model {sorted(lcl_diff)[:5]}")
+
+        if "cheat_Top" in model_bones:
+            opened = os.path.join(out, humanoid_export._unity_anim_filename("open_chest"))
+            failed = os.path.join(out, humanoid_export._unity_anim_filename("fail"))
+            check(os.path.isfile(opened) and os.path.isfile(failed), "chest actions exported with the character")
+            if os.path.isfile(opened):
+                opened_rot = fbx_channel_span(opened, b"Lcl Rotation").get("cheat_Top", 0.0)
+                opened_scale = fbx_channel_bounds(opened, b"Lcl Scaling").get("Chesr_Root", (1.0, 1.0))
+                check(opened_rot > 1.0, f"open_chest rotates the chest ({opened_rot:.2f})")
+                check(abs(opened_scale[0] - 1.0) < 1e-2 and abs(opened_scale[1] - 1.0) < 1e-2,
+                      f"chest root scale stays in the bind pose ({opened_scale})")
+            if os.path.isfile(failed):
+                failed_rot = fbx_channel_span(failed, b"Lcl Rotation").get("cheat_Top", 0.0)
+                check(failed_rot < 1e-2, f"fail leaves the chest at the bind pose ({failed_rot:.4f})")
+    finally:
+        try:
+            if ctx.mode != 'OBJECT':
+                bpy.ops.object.mode_set(mode='OBJECT')
+        except RuntimeError:
+            pass
+        B.clear(ctx)
+        (settings.filepath, settings.anim_dir, settings.anim_source, settings.anim_fps,
+         settings.export_facial_joints, settings.keep_extra_chains) = saved
+        for action, value in saved_ticks.items():
+            if action.name in bpy.data.actions:
+                action.csc_export = value
+        for action in created:
+            if action.name in bpy.data.actions:
+                bpy.data.actions.remove(action)
+        for ob in (mesh, prop):
+            if ob is None or ob.name not in bpy.data.objects:
+                continue
+            data = ob.data
+            remove_object(ctx, ob)
+            if data is not None and data.users == 0:
+                if isinstance(data, bpy.types.Mesh):
+                    bpy.data.meshes.remove(data)
+                elif isinstance(data, bpy.types.Armature):
+                    bpy.data.armatures.remove(data)
+        try:
+            rig_name = rig.name
+        except ReferenceError:
+            rig_name = None
+        if rig_name and ctx.view_layer.objects.get(rig_name):
+            ctx.view_layer.objects.active = ctx.view_layer.objects[rig_name]
+        check(sorted(o.name for o in bpy.data.objects) == names_before, "unity props: object names restored")
+
+
 def main():
     humanoid_export.register()
     ctx = bpy.context
@@ -780,6 +1099,7 @@ def main():
     test_facial_joints(ctx, rig, names_before, orig)
     test_checks(ctx, rig, names_before)
     test_mesh_node_names(ctx, rig, names_before)
+    test_unity_props(ctx, rig, names_before)
     test_load_repair(broken, names_before, [m.name for m in meshes])
 
     print("\nRESULT:", "PASS" if not failures else f"{len(failures)} FAILURE(S)")

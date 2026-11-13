@@ -9,6 +9,7 @@ weights and exports FBX files without changing the source character or animation
 | --- | --- | --- |
 | Character: skeleton and skinned meshes | Humanoid avatar | Quick Rigging Tool, UE4_New template |
 | Animation: current timeline or selected actions | Baked FBX clips, with optional FPS resampling | — |
+| Export to Unity: character and prop armatures | Generic rig, model and clips | — |
 
 Supported inputs are humanoid **Auto-Rig Pro** and **generated Rigify** rigs, including Rigify
 deform-only copies. Optional extra chains preserve bones for tails, hair, clothing and accessories.
@@ -43,7 +44,9 @@ To build the zip yourself, see [CONTRIBUTING.md](CONTRIBUTING.md#building).
    otherwise save the .blend and the FBX is written next to it.
 3. For Unity animation clips, use **Animation (Unity)**: choose **Current** or **All Actions**,
    select the actions to export, then click **Export Animation**.
-4. Follow the [Unity](#unity) or [Cascadeur](#cascadeur) import steps below.
+4. For a prop that has its own armature, mesh and animation, click **Export to Unity** and import
+   that FBX in Unity as a Generic rig. **Export Character** does not include it.
+5. Follow the [Unity](#unity) or [Cascadeur](#cascadeur) import steps below.
 
 ## Usage
 
@@ -136,6 +139,29 @@ How keys are baked:
 - root motion is stored in the `pelvis` translation, the `root` object is not animated; Humanoid
   computes root motion from the hips.
 
+### Export to Unity (Generic)
+
+**Export to Unity** writes the character and every separate prop armature (a chest, a weapon) into
+one skeleton for a Unity **Generic** rig. A prop is a visible armature, other than the character,
+that deforms a visible mesh. The file is not a Mannequin rig: Cascadeur's UE4_New template and
+Unity Humanoid do not use it. **Export Character** and **Export Animation** stay on the Mannequin
+path and leave props out; the panel says so when a prop is in the scene.
+
+The button uses the armature, **Keep Jaw & Eyes**, **Export Facial Joints**, **Keep Extra Chains**,
+and the animation source, folder and FPS from above.
+
+- Model: `<blend name>_unity.fbx` when **File** is empty, otherwise the path in **File**.
+- Clips: `<blend name>_unity@<action>.fbx` in the animation folder, so they do not overwrite the
+  Mannequin clips. **All Actions** assigns each action's slot on the character and on every prop,
+  which is how a shared action with one slot per armature stays in sync. **Current** bakes each
+  armature as the timeline plays it.
+- Prop bones keep their names and hang off `root`, beside `pelvis`, in the prop's world position.
+  They are not parented to `pelvis`, so a prop that stays in place does not follow root motion.
+  Constant location and scale are part of the bind pose, shared by the model and every clip.
+  Rotation is keyed on every prop bone; location and scale are keyed only when they change. A clip
+  with no slot for a prop leaves that prop in the bind pose.
+- Face curves stay on the head unless **Export Facial Joints** is on, the same as the other export.
+
 ## Output
 
 - Armature object `root` (at the origin) → `pelvis` → `spine_01..03` → `neck_01` → `head`
@@ -214,6 +240,15 @@ How keys are baked:
 Animation limitations: avoid animating the rig at the object level (moving the root control),
 otherwise the skeleton's rest pose depends on the frame the export is built on. Facial animation
 other than jaw and eyes is lost unless **Export Facial Joints** is on, as in the model export.
+
+### Generic (Export to Unity)
+
+1. Model (`*_unity.fbx`, or the chosen **File**): Rig → **Generic**, Avatar: Create From This Model.
+2. Clips (`*_unity@*.fbx`): Rig → **Generic**, Avatar: **Copy From Other Avatar** (the model's
+   avatar). The skeleton matches the model, including prop bones. Do not set Humanoid: the prop
+   bones are not a Mannequin rig, and Generic keeps the prop curves without an avatar mask.
+3. The prop's constant scale and position are in the bind pose. Play a clip to see the prop move;
+   a clip that does not animate it leaves it in that bind pose.
 
 ## Batch export
 

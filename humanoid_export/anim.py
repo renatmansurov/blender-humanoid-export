@@ -4,8 +4,9 @@
 """Bakes a rig's animation onto the skeleton built by ``build.build()``.
 
 Every target bone gets the world-space rotation of its first source bone, frame by frame. Only the
-root bone (pelvis) is also keyed in location; the other bones keep their rest offsets, so stretch
-and scale are dropped, as a Humanoid avatar would drop them anyway.
+root bone (pelvis) is also keyed in location; the other character bones keep their rest offsets,
+so stretch and scale are dropped, as a Humanoid avatar would drop them anyway. Prop bones
+(see build.build(props=True)) key location and scale too, when those differ from the bind pose.
 """
 
 import math
@@ -14,7 +15,7 @@ import re
 from contextlib import contextmanager
 
 import bpy
-from mathutils import Matrix
+from mathutils import Matrix, Vector
 
 from . import build as build_mod
 
@@ -124,6 +125,69 @@ def _animates_rig(action, rig, players):
     return (not users or rig in users) and animates_bones(action, rig)
 
 
+# A channel whose keys stay inside this span is constant and can go into the prop bind pose.
+_BIND_SPAN = 1e-5
+
+
+def _constant(values, default):
+    if not values or max(values) - min(values) > _BIND_SPAN:
+        return default
+    return values[0]
+
+
+def _curves_for(action, rig, players):
+    """F-curves of the slot (or legacy action) that animates ``rig``. Empty when none does."""
+    if len(getattr(action, "slots", ())):
+        slot = rig_slot(action, rig, players)
+        if slot is None:
+            return []
+        return _fcurves(action, slot)
+    if not animates_bones(action, rig):
+        return []
+    return _fcurves(action)
+
+
+def action_animates(action, rig, players=None):
+    """The slot of ``action`` that animates ``rig``, the action itself on legacy files, or None."""
+    if len(getattr(action, "slots", ())):
+        return rig_slot(action, rig, players)
+    if animates_bones(action, rig):
+        return action
+    return None
+
+
+def bind_channels(rig):
+    """{bone: (location, scale)} for the prop bind pose.
+
+    Rotation stays at rest. A location or scale channel that is missing or that changes across the
+    actions animating ``rig`` stays at rest (0 or 1), so the clips can still key it. Constant
+    channels are shared by every clip.
+    """
+    players = _players()
+    bones = [b.name for b in rig.data.bones if b.use_deform]
+    location = {n: [[], [], []] for n in bones}
+    scale = {n: [[], [], []] for n in bones}
+    for action in bpy.data.actions:
+        if action.get(build_mod.TMP_PROP):
+            continue
+        for fc in _curves_for(action, rig, players):
+            if not fc.keyframe_points or 'pose.bones["' not in fc.data_path:
+                continue
+            name = fc.data_path.split('"')[1]
+            prop = fc.data_path.rsplit(".", 1)[-1]
+            if name not in location or prop not in ("location", "scale") or not 0 <= fc.array_index < 3:
+                continue
+            bucket = location if prop == "location" else scale
+            bucket[name][fc.array_index].extend(kp.co[1] for kp in fc.keyframe_points)
+    return {
+        name: (
+            tuple(_constant(location[name][i], 0.0) for i in range(3)),
+            tuple(_constant(scale[name][i], 1.0) for i in range(3)),
+        )
+        for name in bones
+    }
+
+
 def rig_actions(rig, selected=True):
     """Actions that animate bones of ``rig`` and do not belong to another armature;
     ``selected`` keeps only those ticked for export (Action.csc_export)."""
@@ -157,35 +221,73 @@ def clips(context, rig, mode):
             for a in rig_actions(rig)]
 
 
+def _remember(ob):
+    ad = ob.animation_data_create()
+    if ad.is_property_readonly("action"):
+        raise build_mod.BuildError(f"'{ob.name}' is in NLA tweak mode; leave it first")
+    return ad, (ad.action, getattr(ad, "action_slot", None), ad.use_nla)
+
+
+def _restore(ad, state):
+    ad.action = state[0]
+    if state[0] is not None and state[1] is not None:
+        ad.action_slot = state[1]
+    ad.use_nla = state[2]
+
+
+def _assign_character(ad, rig, action):
+    """The character keeps the previous fallback: a slot that animates it, else the first slot."""
+    ad.use_nla = False
+    ad.action = action
+    if hasattr(ad, "action_slot"):
+        slot = rig_slot(action, rig)
+        if slot is not None:
+            ad.action_slot = slot
+        elif ad.action_slot is None:
+            slots = list(ad.action_suitable_slots) or list(action.slots)
+            if slots:
+                ad.action_slot = slots[0]
+
+
+def _assign_prop(ad, prop, action):
+    """Plays the slot that animates ``prop``. No such slot leaves the prop with no action, so the
+    bake can hold the bind pose instead of evaluating another armature's slot."""
+    ad.use_nla = False
+    if action_animates(action, prop) is None:
+        ad.action = None
+        return
+    ad.action = action
+    if hasattr(ad, "action_slot"):
+        slot = rig_slot(action, prop)
+        if slot is not None:
+            ad.action_slot = slot
+        else:
+            ad.action = None
+
+
 @contextmanager
-def use_action(context, rig, action):
-    """Plays ``action`` alone (NLA off) on ``rig``; restores the animation state and frame."""
+def use_action(context, rig, action, props=()):
+    """Plays ``action`` alone (NLA off) on ``rig`` and each prop; restores the animation state and frame.
+
+    ``props`` are other armatures that share the action (a chest on its own slot). A prop the action
+    does not animate is left with no action. ``action`` None leaves every armature as it is.
+    """
     scene = context.scene
     frame = scene.frame_current, scene.frame_subframe
-    saved = None
-    if action is not None:
-        ad = rig.animation_data_create()
-        if ad.is_property_readonly("action"):
-            raise build_mod.BuildError(f"'{rig.name}' is in NLA tweak mode; leave it first")
-        saved = ad.action, getattr(ad, "action_slot", None), ad.use_nla
-        ad.use_nla = False
-        ad.action = action
-        if hasattr(ad, "action_slot"):
-            slot = rig_slot(action, rig)
-            if slot is not None:
-                ad.action_slot = slot
-            elif ad.action_slot is None:
-                slots = list(ad.action_suitable_slots) or list(action.slots)
-                if slots:
-                    ad.action_slot = slots[0]
+    saved = []
     try:
+        if action is not None:
+            ad, state = _remember(rig)
+            saved.append((ad, state))
+            _assign_character(ad, rig, action)
+            for prop in props:
+                ad, state = _remember(prop)
+                saved.append((ad, state))
+                _assign_prop(ad, prop, action)
         yield
     finally:
-        if saved is not None:
-            ad.action = saved[0]
-            if saved[0] is not None and saved[1] is not None:
-                ad.action_slot = saved[1]
-            ad.use_nla = saved[2]
+        for ad, state in reversed(saved):
+            _restore(ad, state)
         scene.frame_set(frame[0], subframe=frame[1])
 
 
@@ -221,42 +323,88 @@ def resampled_frames(scene, frame_start, frame_end, fps):
     return [(i, frame_start + i / ratio) for i in range(round((frame_end - frame_start) * ratio) + 1)]
 
 
-def bake(context, build, frame_start, frame_end, name, fps=None):
+# Prop location below this, in metres, stays in the bind pose instead of becoming a curve.
+_PROP_MOVE = 0.0005
+_PROP_SCALE = 1e-3
+
+
+def _pose_bind(arm, channels):
+    """Holds ``arm`` on the prop bind pose (rest rotation, constant location and scale)."""
+    for name, (loc, scale) in channels.items():
+        pb = arm.pose.bones.get(name)
+        if pb is None:
+            continue
+        pb.rotation_mode = 'QUATERNION'
+        pb.rotation_quaternion = (1.0, 0.0, 0.0, 0.0)
+        pb.location = loc
+        pb.scale = scale
+
+
+def _rest_inverse(build, target, sources):
+    if target in build.prop_arm:
+        arm = build.prop_arm[target]
+        return (build.prop_matrix[arm] @ build.prop_rest[target]).inverted()
+    return (build.rig_matrix @ build.source.data.bones[sources[0]].matrix_local).inverted()
+
+
+def bake(context, build, frame_start, frame_end, name, fps=None, hold_bind=()):
     """Samples the source rig (at subframes when resampling to ``fps``, see resampled_frames())
     and returns an action for ``build.armature`` (left assigned to it) keying rotation_quaternion
     of every bone and location of the root bones. Stretch that is dropped this way is reported in
-    ``build.warnings``."""
+    ``build.warnings``.
+
+    Prop bones keep their scale in the sampled pose. Location and scale are keyed only when they
+    differ from the bind pose. Armatures in ``hold_bind`` are posed to that bind on every frame
+    (a clip that has no slot for the prop).
+    """
     scene = context.scene
     rig, arm, plan = build.source, build.armature, build.plan
     scale, scale_inv = build.scale, build.scale.inverted()
     bones = arm.data.bones
-    rest_inv = {t: (build.rig_matrix @ rig.data.bones[sources[0]].matrix_local).inverted()
-                for t, (sources, _) in plan.items()}
+    rest_inv = {t: _rest_inverse(build, t, sources) for t, (sources, _) in plan.items()}
     samples = resampled_frames(scene, frame_start, frame_end, fps)
     frames = [key for key, _ in samples]
-    locs = {t: [] for t in plan if plan[t][1] is None}
+    prop_targets = set(build.prop_arm)
+    locs = {t: [] for t in plan if plan[t][1] is None and t not in prop_targets}
+    prop_locs = {t: [] for t in prop_targets}
+    prop_scales = {t: [] for t in prop_targets}
     rots = {t: [] for t in plan}
-    # Largest offset of a non-root bone from its rest position: (distance, bone, scene time).
+    # Largest offset of a non-root character bone from its rest position: (distance, bone, scene time).
     stretch = (0.0, None, None)
+    hold = [ob for ob in hold_bind if ob in build.prop_bind]
     for _, time in samples:
         whole = math.floor(time)
         scene.frame_set(whole, subframe=time - whole)
+        if hold:
+            for ob in hold:
+                _pose_bind(ob, build.prop_bind[ob])
+            context.view_layer.update()
         pose = {}
         for t, (sources, parent) in plan.items():
             b = bones[t]
-            deform = scale @ rig.matrix_world @ rig.pose.bones[sources[0]].matrix @ rest_inv[t] @ scale_inv
-            loc, rot, _ = (deform @ b.matrix_local).decompose()
-            pose[t] = Matrix.LocRotScale(loc, rot, None)
+            if t in prop_targets:
+                src = build.prop_arm[t]
+            else:
+                src = rig
+            deform = scale @ src.matrix_world @ src.pose.bones[sources[0]].matrix @ rest_inv[t] @ scale_inv
+            loc, rot, sca = (deform @ b.matrix_local).decompose()
+            if t in prop_targets:
+                pose[t] = Matrix.LocRotScale(loc, rot, sca)
+            else:
+                pose[t] = Matrix.LocRotScale(loc, rot, None)
             if parent is None:
                 basis = b.convert_local_to_pose(pose[t], b.matrix_local, invert=True)
             else:
                 basis = b.convert_local_to_pose(pose[t], b.matrix_local, parent_matrix=pose[parent],
                                                 parent_matrix_local=bones[parent].matrix_local, invert=True)
-            loc, rot, _ = basis.decompose()
+            loc, rot, sca = basis.decompose()
             if rots[t]:
                 rot.make_compatible(rots[t][-1])
             rots[t].append(rot)
-            if t in locs:
+            if t in prop_targets:
+                prop_locs[t].append(loc)
+                prop_scales[t].append(sca)
+            elif t in locs:
                 locs[t].append(loc)
             elif loc.length > stretch[0]:
                 stretch = loc.length, t, time
@@ -267,6 +415,15 @@ def bake(context, build, frame_start, frame_end, name, fps=None):
             f"'{name}': bone stretch is not exported (up to {stretch[0] / unit * 100:.1f} cm "
             f"on '{stretch[1]}' at frame {stretch[2]:g})")
 
+    move = _PROP_MOVE * unit
+    for t, samples_loc in prop_locs.items():
+        if any(v.length > move for v in samples_loc):
+            locs[t] = samples_loc
+    keyed_scale = {
+        t: samples_sca for t, samples_sca in prop_scales.items()
+        if any((v - Vector((1.0, 1.0, 1.0))).length > _PROP_SCALE for v in samples_sca)
+    }
+
     action = bpy.data.actions.new(name)
     action[build_mod.TMP_PROP] = True
     ad = arm.animation_data_create()
@@ -275,9 +432,12 @@ def bake(context, build, frame_start, frame_end, name, fps=None):
         pb = arm.pose.bones[t]
         pb.rotation_mode = 'QUATERNION'
         pb.location = (0.0, 0.0, 0.0)
+        pb.scale = (1.0, 1.0, 1.0)
         channels = [("rotation_quaternion", rots[t], 4)]
         if t in locs:
             channels.append(("location", locs[t], 3))
+        if t in keyed_scale:
+            channels.append(("scale", keyed_scale[t], 3))
         for prop, values, size in channels:
             for i in range(size):
                 fc = _fcurve(action, arm, f'pose.bones["{t}"].{prop}', i, t)

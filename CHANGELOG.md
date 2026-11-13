@@ -4,6 +4,21 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 follows [Semantic Versioning](https://semver.org/).
 
+## [0.5.0]
+
+### Added
+
+- **Export to Unity** writes the character and every separate prop armature (a chest, a weapon)
+  onto one skeleton, with one clip per action, for a Unity Generic rig. Prop bones keep their
+  names and hang off `root`, beside `pelvis`, so a prop that stays in world space does not follow
+  the pelvis. Constant location and scale are part of the shared bind pose; clips key rotation,
+  and location or scale only when they change. An action with no slot for a prop leaves that prop
+  in the bind pose.
+- The model and the clips use **Keep Jaw & Eyes**, **Export Facial Joints** and **Keep Extra
+  Chains** together, so the clip skeleton matches the model and Unity can play it with Copy From
+  Other Avatar. **Export Character** and **Export Animation** stay the Mannequin path and do not
+  include props.
+
 ## [0.4.4]
 
 ### Added

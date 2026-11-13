@@ -45,6 +45,15 @@ class Build:
         self.plan = {}
         self.scale = Matrix.Identity(4)
         self.rig_matrix = Matrix.Identity(4)
+        # Prop bones added for the Unity export (see _attach_prop()). Empty unless build(props=True).
+        # prop_arm: export bone -> source armature. prop_rest: export bone -> bind pose matrix.
+        # prop_matrix: source armature -> its world matrix at build time.
+        # prop_bind: source armature -> {bone: (location, scale)} of that bind pose.
+        self.props = []
+        self.prop_arm = {}
+        self.prop_rest = {}
+        self.prop_matrix = {}
+        self.prop_bind = {}
 
 
 def find_source_armature(context):
@@ -96,6 +105,25 @@ def find_bone_children(rigs, deform_rig, view_layer, visible=True):
         and ob.visible_get(view_layer=view_layer) == visible
         and not any(m.type == 'ARMATURE' and m.object == deform_rig for m in ob.modifiers)
     ]
+
+
+def find_prop_armatures(rig, view_layer):
+    """Visible armatures, other than ``rig`` and its deform or control rig, that deform a visible mesh.
+
+    A chest or a weapon with its own armature and mesh. Sorted by name. Temporary export objects
+    are skipped."""
+    deform = find_deform_rig(rig, view_layer)
+    skip = linked_rigs(rig, deform)
+    found = [
+        ob for ob in view_layer.objects
+        if ob.type == 'ARMATURE'
+        and ob not in skip
+        and not ob.get(TMP_PROP)
+        and ob.visible_get(view_layer=view_layer)
+        and find_meshes(ob, view_layer)
+    ]
+    found.sort(key=lambda ob: ob.name)
+    return found
 
 
 def find_deform_rig(rig, view_layer):
@@ -500,12 +528,199 @@ def _copy_mesh(context, src, rig, arm, collection, scale, warnings, export_name,
     return ob
 
 
+def _prop_bone_plan(rig, taken):
+    """{export name: ([source bone], parent export name)} for the deform bones of a prop.
+
+    Parents come first. A name already in ``taken`` (the character bones, ``root``) gets an
+    ``_extra`` suffix. Returns the renamed pairs too."""
+    bones = sorted((b for b in rig.data.bones if b.use_deform), key=lambda b: len(b.parent_recursive))
+    names = {}
+    plan = {}
+    renamed = []
+    for b in bones:
+        target = b.name
+        if target in taken or target in plan:
+            original = target
+            while target in taken or target in plan:
+                target += "_extra"
+            renamed.append(f"{original}->{target}")
+        parent = None
+        walker = b.parent
+        while walker is not None:
+            if walker.name in names:
+                parent = names[walker.name]
+                break
+            walker = walker.parent
+        plan[target] = ([b.name], parent)
+        names[b.name] = target
+    return plan, renamed
+
+
+def _duplicate_armature(rig, collection):
+    """A posed copy of ``rig`` in ``collection``, with no action, at the same world matrix."""
+    world = rig.matrix_world.copy()
+    arm = rig.copy()
+    arm.data = rig.data.copy()
+    arm[TMP_PROP] = True
+    if arm.animation_data:
+        arm.animation_data_clear()
+    collection.objects.link(arm)
+    arm.matrix_world = world
+    return arm
+
+
+def _duplicate_mesh(src, rig, arm, collection):
+    """A copy of ``src`` whose Armature modifier points at ``arm``, at the same world matrix."""
+    world = src.matrix_world.copy()
+    ob = src.copy()
+    ob.data = src.data.copy()
+    ob[TMP_PROP] = True
+    if ob.animation_data:
+        ob.animation_data_clear()
+    collection.objects.link(ob)
+    if ob.parent == rig:
+        ob.parent = arm
+    ob.matrix_world = world
+    for mod in ob.modifiers:
+        if mod.type == 'ARMATURE' and mod.object == rig:
+            mod.object = arm
+    return ob
+
+
+def _set_bind_pose(arm, channels):
+    """Pose channels of the prop bind: rest rotation, plus constant location and scale."""
+    for pb in arm.pose.bones:
+        loc, scale = channels.get(pb.name, ((0.0, 0.0, 0.0), (1.0, 1.0, 1.0)))
+        pb.rotation_mode = 'QUATERNION'
+        pb.rotation_quaternion = (1.0, 0.0, 0.0, 0.0)
+        pb.location = loc
+        pb.scale = scale
+
+
+def _bake_bind_vertices(context, ob):
+    """Writes the current armature deformation into ``ob``'s vertices.
+
+    Other modifiers stay for ``_copy_mesh()``. ``pose.armature_apply()`` moves the bones and does
+    not move the mesh, so the vertices have to be baked first or the bind pose and the mesh disagree.
+    """
+    others = [m for m in ob.modifiers if m.type != 'ARMATURE']
+    for m in others:
+        m.show_viewport = False
+    try:
+        depsgraph = context.evaluated_depsgraph_get()
+        ev = ob.evaluated_get(depsgraph)
+        tmp = ev.to_mesh()
+        coords = [v.co.copy() for v in tmp.vertices]
+        ev.to_mesh_clear()
+    finally:
+        for m in others:
+            m.show_viewport = True
+    me = ob.data
+    if len(coords) != len(me.vertices):
+        return
+    if me.shape_keys:
+        basis = me.shape_keys.key_blocks[0]
+        for i, co in enumerate(coords):
+            basis.data[i].co = co
+    for v, co in zip(me.vertices, coords):
+        v.co = co
+    me.update()
+
+
+def _apply_pose_as_rest(context, arm):
+    context.view_layer.objects.active = arm
+    bpy.ops.object.mode_set(mode='POSE')
+    try:
+        result = bpy.ops.pose.armature_apply(selected=False)
+    finally:
+        if context.mode != 'OBJECT':
+            bpy.ops.object.mode_set(mode='OBJECT')
+    if 'FINISHED' not in result:
+        raise BuildError(f"Could not apply the bind pose of '{arm.name}'")
+
+
+def _add_prop_bones(context, arm, dup, plan, scale):
+    """Appends ``plan`` to the export armature ``arm`` from the bind pose of ``dup``.
+
+    Prop roots are parented to the armature object, beside ``pelvis``, so a prop that sits in world
+    space does not follow the character's pelvis."""
+    context.view_layer.objects.active = arm
+    bpy.ops.object.mode_set(mode='EDIT')
+    try:
+        data = arm.data
+        bones = dup.data.bones
+        mat = scale @ dup.matrix_world
+        rot = dup.matrix_world.to_3x3()
+        for target, (sources, _parent) in plan.items():
+            bone = bones[sources[0]]
+            eb = data.edit_bones.new(target)
+            head_local, tail_local = bone.head_local.copy(), bone.tail_local.copy()
+            if (tail_local - head_local).length_squared < 1e-10:
+                axis = Vector(bone.matrix_local.col[1].xyz)
+                if axis.length_squared < 1e-16:
+                    axis = Vector((0.0, 1.0, 0.0))
+                tail_local = head_local + axis.normalized() * 0.001
+            eb.head = mat @ head_local
+            eb.tail = mat @ tail_local
+            eb.align_roll((rot @ bone.matrix_local.col[2].xyz).normalized())
+            eb.use_deform = True
+            eb.use_connect = False
+        for target, (_sources, parent) in plan.items():
+            if parent is not None:
+                data.edit_bones[target].parent = data.edit_bones[parent]
+    finally:
+        bpy.ops.object.mode_set(mode='OBJECT')
+
+
+def _attach_prop(context, result, prop, collection, scale, taken, with_meshes):
+    """Folds ``prop`` into ``result``: bind pose on a copy, bones under the export root, meshes.
+
+    Returns [(original mesh, duplicate mesh, duplicate armature, {source: export}, export names)]
+    for the meshes still to be copied, or an empty list."""
+    from . import anim as anim_mod
+
+    prop_plan, renamed = _prop_bone_plan(prop, taken)
+    if not prop_plan:
+        return []
+    if renamed:
+        result.warnings.append(f"Prop '{prop.name}': bone name clash, exported as {renamed[:5]}")
+    channels = anim_mod.bind_channels(prop)
+    dup = _duplicate_armature(prop, collection)
+    pairs = []
+    if with_meshes:
+        for src in find_meshes(prop, context.view_layer):
+            pairs.append((src, _duplicate_mesh(src, prop, dup, collection)))
+    context.view_layer.update()
+    _set_bind_pose(dup, channels)
+    context.view_layer.update()
+    for _src, dup_mesh in pairs:
+        _bake_bind_vertices(context, dup_mesh)
+    # Pose scale is baked into the bone length, so matrix_local afterwards has no scale. The
+    # sampler has to compare against this pose matrix, which still carries it, or a constant
+    # scale becomes a curve on top of the bind pose.
+    bind_matrix = {pb.name: pb.matrix.copy() for pb in dup.pose.bones}
+    _apply_pose_as_rest(context, dup)
+    _add_prop_bones(context, result.armature, dup, prop_plan, scale)
+    for target, (sources, parent) in prop_plan.items():
+        result.plan[target] = (sources, parent)
+        result.prop_arm[target] = prop
+        result.prop_rest[target] = bind_matrix[sources[0]]
+    result.prop_matrix[prop] = prop.matrix_world.copy()
+    result.prop_bind[prop] = channels
+    result.props.extend(prop_plan)
+    taken.update(prop_plan)
+    bone_target = {sources[0]: target for target, (sources, _) in prop_plan.items()}
+    return [(src, dup_mesh, dup, bone_target, list(prop_plan)) for src, dup_mesh in pairs]
+
+
 def build(context, rig, keep_face=True, unit_scale=1.0, meshes=True, extra_chains=False,
-          facial_joints=False):
+          facial_joints=False, props=False):
     """``unit_scale`` multiplies all coordinates (100 = bake metres into centimetres).
     ``meshes=False`` builds the skeleton only, also for a rig that deforms no meshes.
     ``facial_joints`` keeps facial deform bones as joints of their own (see _plan_facial()).
-    ``extra_chains`` keeps other unmapped deform chains as bones of their own (see _plan_extras())."""
+    ``extra_chains`` keeps other unmapped deform chains as bones of their own (see _plan_extras()).
+    ``props`` adds each separate prop armature (see find_prop_armatures()) under the export root.
+    """
     chosen = rig
     rig = find_deform_rig(rig, context.view_layer)
     profile = mapping.detect(rig)
@@ -518,7 +733,8 @@ def build(context, rig, keep_face=True, unit_scale=1.0, meshes=True, extra_chain
     result = Build()
     sources = find_meshes(rig, context.view_layer) if meshes else []
     children = find_bone_children(linked_rigs(chosen, rig), rig, context.view_layer) if meshes else []
-    if meshes and not sources and not children:
+    prop_rigs = find_prop_armatures(chosen, context.view_layer) if props else []
+    if meshes and not sources and not children and not prop_rigs:
         raise BuildError(f"No visible meshes deformed by '{rig.name}'")
 
     plan = _plan_skeleton(rig, keep_face, result.warnings)
@@ -537,27 +753,45 @@ def build(context, rig, keep_face=True, unit_scale=1.0, meshes=True, extra_chain
     previous_active = context.view_layer.objects.active
     result.armature = _build_armature(context, rig, plan, collection, scale, profile.reversed)
     context.view_layer.objects.active = previous_active
-    result.bone_count = len(plan)
     result.source, result.plan, result.scale = rig, plan, scale
     result.rig_matrix = rig.matrix_world.copy()
-    if not sources and not children:
+    # Character weights are resolved on this plan. Prop bones are added afterwards and must not
+    # become merge targets for the character.
+    character_plan = dict(plan)
+    prop_copies = []
+    if prop_rigs:
+        taken = {mapping.ROOT_NAME, *plan}
+        for prop in prop_rigs:
+            prop_copies.extend(
+                _attach_prop(context, result, prop, collection, scale, taken, meshes))
+        context.view_layer.objects.active = previous_active
+    result.bone_count = len(result.plan)
+    if not sources and not children and not prop_copies:
         context.view_layer.update()
         return result
-    bone_target = _weight_targets(rig, plan, profile.aliases, result.warnings)
-    export_names = _mesh_export_names([*sources, *children], {mapping.ROOT_NAME, *plan})
+    originals = [src for src, *_rest in prop_copies]
+    export_names = _mesh_export_names([*sources, *children, *originals], {mapping.ROOT_NAME, *result.plan})
     # Free names are copied first. A later rename then cannot claim the object name a mesh that
     # keeps its own name still holds.
-    for src in sorted(sources, key=lambda ob: export_names[ob] != ob.name):
-        ob = _copy_mesh(context, src, rig, result.armature, collection, scale, result.warnings,
+    if sources or children:
+        bone_target = _weight_targets(rig, character_plan, profile.aliases, result.warnings)
+        targets = list(character_plan)
+        for src in sorted(sources, key=lambda ob: export_names[ob] != ob.name):
+            ob = _copy_mesh(context, src, rig, result.armature, collection, scale, result.warnings,
+                            export_names[src])
+            _remap_weights(ob, bone_target, targets)
+            result.meshes.append(ob)
+        source_target = _source_targets(character_plan, profile.aliases)
+        for src in sorted(children, key=lambda ob: export_names[ob] != ob.name):
+            target, _ = _bone_child_target(src, rig, character_plan, bone_target, source_target)
+            ob = _copy_mesh(context, src, rig, result.armature, collection, scale, result.warnings,
+                            export_names[src], world=_rest_world(src))
+            _rigid_skin(ob, target, targets, result.armature)
+            result.meshes.append(ob)
+    for src, dup_mesh, dup_arm, bone_target, targets in prop_copies:
+        ob = _copy_mesh(context, dup_mesh, dup_arm, result.armature, collection, scale, result.warnings,
                         export_names[src])
-        _remap_weights(ob, bone_target, list(plan))
-        result.meshes.append(ob)
-    source_target = _source_targets(plan, profile.aliases)
-    for src in sorted(children, key=lambda ob: export_names[ob] != ob.name):
-        target, _ = _bone_child_target(src, rig, plan, bone_target, source_target)
-        ob = _copy_mesh(context, src, rig, result.armature, collection, scale, result.warnings,
-                        export_names[src], world=_rest_world(src))
-        _rigid_skin(ob, target, list(plan), result.armature)
+        _remap_weights(ob, bone_target, targets)
         result.meshes.append(ob)
     context.view_layer.update()
     return result

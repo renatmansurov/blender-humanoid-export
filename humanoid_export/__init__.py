@@ -113,9 +113,27 @@ def _resolve_anim_dir(context):
     return os.path.dirname(bpy.data.filepath) if bpy.data.filepath else None
 
 
+def _blend_stem():
+    if bpy.data.filepath:
+        return os.path.splitext(bpy.path.basename(bpy.data.filepath))[0]
+    return "animation"
+
+
 def _anim_filename(clip, sanitize=True):
-    stem = os.path.splitext(bpy.path.basename(bpy.data.filepath))[0] if bpy.data.filepath else "animation"
-    return f"{stem}@{anim_mod.safe_name(clip) if sanitize else clip}.fbx"
+    return f"{_blend_stem()}@{anim_mod.safe_name(clip) if sanitize else clip}.fbx"
+
+
+def _resolve_unity_filepath(context):
+    """Model FBX for Export to Unity. A set File is used as is; otherwise <blend>_unity.fbx."""
+    if context.scene.csc_export.filepath:
+        return _resolve_filepath(context)
+    if not bpy.data.filepath:
+        return None
+    return os.path.join(os.path.dirname(bpy.data.filepath), f"{_blend_stem()}_unity.fbx")
+
+
+def _unity_anim_filename(clip, sanitize=True):
+    return f"{_blend_stem()}_unity@{anim_mod.safe_name(clip) if sanitize else clip}.fbx"
 
 
 def _restore_mode(context, mode):
@@ -261,6 +279,74 @@ class CSC_OT_export_animation(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class CSC_OT_export_unity(bpy.types.Operator):
+    bl_idname = "humanoid.export_unity"
+    bl_label = "Export to Unity"
+    bl_description = ("Export the character and prop armatures on one skeleton, with animation clips, "
+                      "for a Unity Generic rig")
+    bl_options = {'REGISTER'}
+
+    def execute(self, context):
+        settings = context.scene.csc_export
+        rig = _resolve_armature(context)
+        if rig is None:
+            self.report({'ERROR'}, "Select the character armature or one of its meshes")
+            return {'CANCELLED'}
+        filepath = _resolve_unity_filepath(context)
+        if filepath is None:
+            self.report({'ERROR'}, "Save the .blend first or set an output file")
+            return {'CANCELLED'}
+        deform = build_mod.find_deform_rig(rig, context.view_layer)
+        anim_rig = anim_mod.find_animated_rig(rig, deform)
+        prop_arms = build_mod.find_prop_armatures(rig, context.view_layer)
+        want_clips = settings.anim_source == 'ALL' or anim_mod.is_animated(anim_rig)
+        clips = anim_mod.clips(context, anim_rig, settings.anim_source) if want_clips else []
+        directory = _resolve_anim_dir(context)
+        if clips and directory is None:
+            self.report({'ERROR'}, "Save the .blend first or set an animation folder")
+            return {'CANCELLED'}
+        if clips and anim_rig.animation_data and anim_rig.animation_data.use_tweak_mode:
+            self.report({'ERROR'}, f"'{anim_rig.name}' is in NLA tweak mode; leave it first")
+            return {'CANCELLED'}
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        if clips:
+            os.makedirs(directory, exist_ok=True)
+        mode = context.mode
+        written = []
+        try:
+            result = build_mod.build(context, rig, settings.keep_face, export_mod.centimetre_scale(context.scene),
+                                     extra_chains=settings.keep_extra_chains,
+                                     facial_joints=settings.export_facial_joints, props=True)
+            export_mod.export_fbx(context, filepath, result)
+            fps = settings.anim_fps or None
+            for name, action, start, end in clips:
+                held = [p for p in prop_arms if action is not None and anim_mod.action_animates(action, p) is None]
+                for prop in held:
+                    result.warnings.append(
+                        f"'{name}': '{prop.name}' has no animation in this action; it stays in the bind pose")
+                with anim_mod.use_action(context, anim_rig, action, prop_arms):
+                    baked = anim_mod.bake(context, result, start, end, name, fps, hold_bind=held)
+                clip_path = os.path.join(directory, _unity_anim_filename(name))
+                export_mod.export_anim_fbx(context, clip_path, result, baked, name, fps)
+                written.append(clip_path)
+        except build_mod.BuildError as e:
+            self.report({'ERROR'}, str(e))
+            return {'CANCELLED'}
+        finally:
+            build_mod.clear(context)
+            _restore_mode(context, mode)
+        _report_build(self, context, result)
+        clips_where = ""
+        if written:
+            clips_where = written[0] if len(written) == 1 else f"{len(written)} clips in {directory}"
+            clips_where = f" and {clips_where}"
+        elif want_clips and settings.anim_source == 'ALL':
+            clips_where = " (no actions ticked)"
+        self.report({'INFO'}, f"Exported {result.bone_count} bones, {len(result.meshes)} mesh(es) to "
+                              f"{filepath}{clips_where}")
+        return {'FINISHED'}
+
+
 class CSC_OT_build_preview(bpy.types.Operator):
     bl_idname = "humanoid.build_preview"
     bl_label = "Build Preview"
@@ -398,6 +484,17 @@ class CSC_PT_panel(bpy.types.Panel):
                                                    _resolve_anim_dir(context)))
         box.operator(CSC_OT_export_animation.bl_idname, icon='EXPORT')
 
+        unity = layout.box()
+        unity.label(text="Unity (Generic)", icon='ARMATURE_DATA')
+        unity.label(text="Character and props on one skeleton. Not a Mannequin rig.")
+        unity_path = _resolve_unity_filepath(context)
+        unity.label(text=bpy.path.basename(unity_path) if unity_path else "Save the .blend first", icon='FILE')
+        unity.label(text=_unity_anim_filename("<action>", sanitize=False), icon='ACTION')
+        if selected is not None:
+            _draw_checks(unity, context, checks.safe(checks.unity, context, selected, settings.anim_source,
+                                                     _resolve_anim_dir(context)))
+        unity.operator(CSC_OT_export_unity.bl_idname, icon='EXPORT')
+
 
 @bpy.app.handlers.persistent
 def _on_save_pre(*_args):
@@ -441,6 +538,7 @@ classes = (
     CSC_Settings,
     CSC_OT_export_character,
     CSC_OT_export_animation,
+    CSC_OT_export_unity,
     CSC_OT_build_preview,
     CSC_OT_clear_preview,
     CSC_UL_actions,
