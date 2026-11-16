@@ -18,6 +18,11 @@ follows [Semantic Versioning](https://semver.org/).
   Chains** together, so the clip skeleton matches the model and Unity can play it with Copy From
   Other Avatar. **Export Character** and **Export Animation** stay the Mannequin path and do not
   include props.
+- Facial joints keep their translation when it leaves the bind pose, so a smile that moves the
+  lip corners is in the clip. A Humanoid clip still needs a transform mask for those joints.
+- **Export to Unity** also keeps translation on the other character bones when it leaves the bind
+  pose, so an arm the IK has slid still reaches the pose (hands on the hips). Scale is still
+  dropped. **Export Animation** stays rotation-only and still warns about the dropped offset.
 
 ## [0.4.4]
 

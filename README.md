@@ -125,11 +125,12 @@ How keys are baked:
 
 - on every frame each bone gets the world-space rotation of its (first) source bone, with all
   constraints, IK and drivers;
-- rotation is keyed on every bone (quaternions without sign flips), location only on `pelvis`;
-  the other bones keep their rest length, so stretch/squash and scale are not transferred
-  (Humanoid ignores them anyway). If the animation stretches bones (e.g. Auto-Rig Pro IK
-  auto-stretch), the export warns with the largest stretch and its frame; fix it in the animation
-  if that pose matters;
+- rotation is keyed on every bone (quaternions without sign flips), location on `pelvis` and,
+  with **Export Facial Joints**, on a facial joint whose translation leaves the bind pose (a smile
+  that moves the lip corners). The other bones keep their rest length, so stretch/squash and scale
+  are not transferred (Humanoid ignores them on the body anyway). If the animation stretches bones
+  (e.g. Auto-Rig Pro IK auto-stretch), the export warns with the largest stretch and its frame;
+  fix it in the animation if that pose matters;
 - every frame is keyed, with no simplification in Blender: keyframe reduction is left to Unity
   (Anim. Compression);
 - the FBX contains the skeleton and a tiny helper mesh `csc_bind_pose` (one triangle per bone)
@@ -161,6 +162,10 @@ and the animation source, folder and FPS from above.
   Rotation is keyed on every prop bone; location and scale are keyed only when they change. A clip
   with no slot for a prop leaves that prop in the bind pose.
 - Face curves stay on the head unless **Export Facial Joints** is on, the same as the other export.
+- Character bones other than `pelvis` also keep their translation when it leaves the bind pose.
+  An arm the IK has slid (the hands on the hips) reaches that pose in Unity. Scale is still
+  dropped. **Export Animation** does not do this: a Humanoid clip ignores limb translation, and
+  that export still warns when it drops the offset.
 
 ## Output
 
@@ -240,6 +245,8 @@ and the animation source, folder and FPS from above.
 Animation limitations: avoid animating the rig at the object level (moving the root control),
 otherwise the skeleton's rest pose depends on the frame the export is built on. Facial animation
 other than jaw and eyes is lost unless **Export Facial Joints** is on, as in the model export.
+With it on, a facial joint that moves off its bind position keeps that translation, so a smile
+plays on a Generic rig. Humanoid still needs the mask in item 4 before those curves import.
 
 ### Generic (Export to Unity)
 
