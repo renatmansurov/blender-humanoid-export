@@ -170,8 +170,11 @@ and the animation source, folder and FPS from above.
   with **Export Facial Joints**, plus the extra chains with **Keep Extra Chains**.
 - Auto-Rig Pro twist/stretch segments are merged into one bone per segment, spine bend bones become
   `spine_*`, finger `*_base` bones are merged into `hand`. Weights of unmapped deform bones go to
-  the nearest mapped ancestor; if there is none (the bone hangs off a non-deform control), they go
-  to the closest export bone by position, with a warning. With **Export Facial Joints** each
+  the nearest mapped ancestor. An Auto-Rig Pro control counts as that ancestor
+  (`spine_01.x` and `c_spine_01.x` for `c_spine_01_bend.x`, `c_head.x` for `head.x`,
+  `forearm_stretch.l` for `c_forearm_stretch.l`), so a collar or cuff corrective follows the body
+  bone. A bone that still has no exported ancestor goes to the closest export bone by position,
+  and a body or clothing bone never picks a facial joint, with a warning. With **Export Facial Joints** each
   remaining facial deform bone becomes a joint of its own instead. With **Keep Extra Chains** the
   other bones that are not merged on purpose (see above) become bones of their own; a bone without
   an exported ancestor is placed under the closest export bone, with a warning.

@@ -1364,9 +1364,13 @@ def test_facial_joints(ctx, rig, names_before, orig):
             parent = parent.parent
         got = None if parent is None else parent.name
         check(got == ancestor, f"{name} hangs off {ancestor} ({got})")
-    bone_target = B._weight_targets(rig, result.plan, profile.aliases, [])
+    bone_target = B._weight_targets(rig, result.plan, profile.aliases, [], profile.face)
     leaked = [n for n in face_bones if bone_target.get(n) in ("head", "jaw")]
     check(not leaked, f"facial weights stay on the facial joints {leaked[:5]}")
+    facial_names = set(kept)
+    onto_face = [f"{n}->{bone_target[n]}" for n, t in bone_target.items()
+                 if t in facial_names and n in rig.data.bones and not profile.face(rig.data.bones[n])]
+    check(not onto_face, f"body and clothing weights stay off the facial joints {onto_face[:5]}")
     targets = {b.name for b in arm.data.bones}
     for ob in result.meshes:
         _, sums = orig[ob.name]

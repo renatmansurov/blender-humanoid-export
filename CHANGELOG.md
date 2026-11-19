@@ -19,6 +19,13 @@ follows [Semantic Versioning](https://semver.org/).
   Other Avatar. **Export Character** and **Export Animation** stay the Mannequin path and do not
   include props.
 
+### Fixed
+
+- Clothing correctives parented to an Auto-Rig Pro control (`spine_01.x`, `c_head.x`,
+  `forearm_stretch.l`) follow that control's body bone. A body bone with no exported ancestor
+  no longer falls onto a facial joint, which was skinning the collar to the cheek. `Bingl`,
+  the lip-corner deform bone, is exported with the other facial joints.
+
 ## [0.4.4]
 
 ### Added

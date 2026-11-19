@@ -313,9 +313,23 @@ def _build_armature(context, rig, plan, collection, scale, reversed_targets):
     return arm
 
 
-def _weight_targets(rig, plan, aliases, warnings):
-    """Maps every deform bone of the rig to the target bone that receives its weights."""
+def _weight_targets(rig, plan, aliases, warnings, face=None):
+    """Maps every deform bone of the rig to the target bone that receives its weights.
+
+    ``face`` (Profile.face) keeps a body or clothing bone that has no exported ancestor off the
+    facial joints. Those joints sit next to the collar on a short character, and the nearest-bone
+    fallback would otherwise skin the collar to a cheek.
+    """
     source_target = _source_targets(plan, aliases)
+    body_plan = plan
+    if face is not None:
+        body_plan = {}
+        for target, (sources, parent) in plan.items():
+            source = rig.data.bones.get(sources[0])
+            if source is None or not face(source):
+                body_plan[target] = (sources, parent)
+        if not body_plan:
+            body_plan = plan
     result = {}
     orphans = []
     for bone in rig.data.bones:
@@ -325,7 +339,8 @@ def _weight_targets(rig, plan, aliases, warnings):
         while b is not None and b.name not in source_target:
             b = b.parent
         if b is None:
-            target = _nearest_target(rig, plan, bone.head_local, bone.tail_local)
+            pool = plan if face is not None and face(bone) else body_plan
+            target = _nearest_target(rig, pool, bone.head_local, bone.tail_local)
             orphans.append(f"{bone.name}->{target}")
             result[bone.name] = target
         else:
@@ -774,7 +789,7 @@ def build(context, rig, keep_face=True, unit_scale=1.0, meshes=True, extra_chain
     # Free names are copied first. A later rename then cannot claim the object name a mesh that
     # keeps its own name still holds.
     if sources or children:
-        bone_target = _weight_targets(rig, character_plan, profile.aliases, result.warnings)
+        bone_target = _weight_targets(rig, character_plan, profile.aliases, result.warnings, profile.face)
         targets = list(character_plan)
         for src in sorted(sources, key=lambda ob: export_names[ob] != ob.name):
             ob = _copy_mesh(context, src, rig, result.armature, collection, scale, result.warnings,

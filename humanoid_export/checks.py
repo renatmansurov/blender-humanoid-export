@@ -70,7 +70,7 @@ def character(context, rig, keep_face=True, extra_chains=False, facial_joints=Fa
             result.append(('WARNING', f"'{ob.name}': shape keys lost, modifiers "
                                       f"{_names(m.name for m in dropping)} are applied"))
     if children:
-        bone_target = build_mod._weight_targets(deform, plan, profile.aliases, [])
+        bone_target = build_mod._weight_targets(deform, plan, profile.aliases, [], profile.face)
         source_target = build_mod._source_targets(plan, profile.aliases)
         for ob in children:
             target, guessed = build_mod._bone_child_target(ob, deform, plan, bone_target, source_target)
