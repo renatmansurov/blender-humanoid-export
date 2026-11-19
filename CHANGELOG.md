@@ -24,6 +24,13 @@ follows [Semantic Versioning](https://semver.org/).
   pose, so an arm the IK has slid still reaches the pose (hands on the hips). Scale is still
   dropped. **Export Animation** stays rotation-only and still warns about the dropped offset.
 
+### Fixed
+
+- Clothing correctives parented to an Auto-Rig Pro control (`spine_01.x`, `c_head.x`,
+  `forearm_stretch.l`) follow that control's body bone. A body bone with no exported ancestor
+  no longer falls onto a facial joint, which was skinning the collar to the cheek. `Bingl`,
+  the lip-corner deform bone, is exported with the other facial joints.
+
 ## [0.4.4]
 
 ### Added

@@ -111,7 +111,9 @@ ARP_FACE = ("c_lips_", "c_eye", "c_nose_", "c_chin_", "c_cheek_", "c_teeth_", "t
 
 
 def _arp_is_face(bone):
-    return bone.name.startswith(ARP_FACE)
+    # Bingl is ARP's lip-corner deform bone. Some rigs name it Bingl.l, not c_bingl.l, and it
+    # copies the smile control, so it has to count as a face bone or the corner is merged away.
+    return bone.name.startswith(ARP_FACE) or bone.name.startswith("Bingl")
 
 
 def _arp_merged(bone):
@@ -120,10 +122,31 @@ def _arp_merged(bone):
     return _arp_is_face(bone) or "_base." in name or "twist" in name or "_bend" in name
 
 
+def _arp_aliases(source):
+    """Control bones that stand for an ARP deform bone.
+
+    A collar or cuff corrective hangs off the control (``spine_01.x``, ``c_spine_01.x``,
+    ``c_head.x``, ``forearm_stretch.l``), not off the deform bone the export maps
+    (``c_spine_01_bend.x``, ``head.x``, ``c_forearm_stretch.l``). Naming the control here lets
+    those weights follow the body bone instead of whichever joint happens to be nearest.
+    """
+    names = []
+    if source.startswith("c_") and "_bend." in source:
+        stem, side = source[2:].split("_bend", 1)
+        names.append(f"c_{stem}{side}")
+        names.append(f"{stem}{side}")
+    names.append(source[2:] if source.startswith("c_") else "c_" + source)
+    seen = []
+    for name in names:
+        if name != source and name not in seen:
+            seen.append(name)
+    return tuple(seen)
+
+
 # ARP's c_root_bend.x starts at the spine base and points down to the hips; reversed, the pelvis
 # joint sits at hip level below spine_01 instead of on top of it, which Cascadeur needs to get a
 # defined pelvis direction.
-ARP = Profile("Auto-Rig Pro", ARP_SIGNATURE, _arp_entries, {"pelvis"}, lambda source: (), _arp_merged,
+ARP = Profile("Auto-Rig Pro", ARP_SIGNATURE, _arp_entries, {"pelvis"}, _arp_aliases, _arp_merged,
               _arp_is_face)
 
 
