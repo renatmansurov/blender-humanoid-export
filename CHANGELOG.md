@@ -4,6 +4,23 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 follows [Semantic Versioning](https://semver.org/).
 
+## [0.5.1]
+
+### Added
+
+- Facial joints keep their translation when it leaves the bind pose, so a smile that moves the
+  lip corners is in the clip. A Humanoid clip still needs a transform mask for those joints.
+- **Export to Unity** also keeps translation on the other character bones when it leaves the bind
+  pose, so an arm the IK has slid still reaches the pose (hands on the hips). Scale is still
+  dropped. **Export Animation** stays rotation-only and still warns about the dropped offset.
+
+### Fixed
+
+- Clothing correctives parented to an Auto-Rig Pro control (`spine_01.x`, `c_head.x`,
+  `forearm_stretch.l`) follow that control's body bone. A body bone with no exported ancestor
+  no longer falls onto a facial joint, which was skinning the collar to the cheek. `Bingl`,
+  the lip-corner deform bone, is exported with the other facial joints.
+
 ## [0.5.0]
 
 ### Added
@@ -18,18 +35,6 @@ follows [Semantic Versioning](https://semver.org/).
   Chains** together, so the clip skeleton matches the model and Unity can play it with Copy From
   Other Avatar. **Export Character** and **Export Animation** stay the Mannequin path and do not
   include props.
-- Facial joints keep their translation when it leaves the bind pose, so a smile that moves the
-  lip corners is in the clip. A Humanoid clip still needs a transform mask for those joints.
-- **Export to Unity** also keeps translation on the other character bones when it leaves the bind
-  pose, so an arm the IK has slid still reaches the pose (hands on the hips). Scale is still
-  dropped. **Export Animation** stays rotation-only and still warns about the dropped offset.
-
-### Fixed
-
-- Clothing correctives parented to an Auto-Rig Pro control (`spine_01.x`, `c_head.x`,
-  `forearm_stretch.l`) follow that control's body bone. A body bone with no exported ancestor
-  no longer falls onto a facial joint, which was skinning the collar to the cheek. `Bingl`,
-  the lip-corner deform bone, is exported with the other facial joints.
 
 ## [0.4.4]
 
