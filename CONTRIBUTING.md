@@ -116,8 +116,9 @@ no face or helper bones among the extras, mapped bones keep their parents, weigh
 preserved, the posed mesh matches, the extras are baked with the rig's rotation and are in the
 character and clip FBX. With Export Facial Joints: every other facial deform bone is its own
 joint under the bone its weights used to merge into, jaw and eyes join that set when Keep Jaw &
-Eyes is off, weight sums are preserved, the joints are baked with the rig's rotation and are in
-the character and clip FBX. Also checked: the panel's pre-export checks, that saving with the preview built writes
+Eyes is off, weight sums are preserved, the joints are baked with the rig's rotation and
+translation and are in the character and clip FBX. Animated translation in that clip is only
+`pelvis` and those facial joints. Also checked: the panel's pre-export checks, that saving with the preview built writes
 the source names, and that a file saved with a preview is repaired when opened (the copies are
 written to `out_dir`; the character .blend itself is never saved).
 

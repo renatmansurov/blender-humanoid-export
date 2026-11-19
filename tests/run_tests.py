@@ -1383,9 +1383,15 @@ def test_facial_joints(ctx, rig, names_before, orig):
     anim_rig = A.find_animated_rig(rig, rig)
     start, end = scene.frame_start, scene.frame_end
     with A.use_action(ctx, anim_rig, None):
-        A.bake(ctx, result, start, end, "bake_facial")
+        action = A.bake(ctx, result, start, end, "bake_facial")
     roots = {t for t, (_, parent) in result.plan.items() if parent is None}
+    keyed_loc = {fc.data_path.split('"')[1] for fc in A._fcurves(action)
+                 if fc.data_path.endswith(".location")}
+    check(keyed_loc <= roots | set(kept),
+          f"facial: location only on the root and facial joints {sorted(keyed_loc - roots - set(kept))[:5]}")
     if kept:
+        # World position still follows a parent whose own stretch was dropped (the head). The
+        # facial translation is the local channel, checked on the curves above and in the FBX.
         for frame in sorted({start, end}):
             scene.frame_set(frame)
             _, max_rot, _ = baked_pose_error(result, roots, kept)
@@ -1417,7 +1423,9 @@ def test_facial_joints(ctx, rig, names_before, orig):
               "facial: facial joints in the character and the clip FBX")
         diff = {n for n in bones if info["parents"][n] != character["parents"].get(n)}
         check(not diff, f"facial: clip hierarchy matches the character FBX {sorted(diff)[:5]}")
-        check(info["moving"] <= {"pelvis"}, f"facial: only pelvis translation animated {sorted(info['moving'])[:5]}")
+        extra_moving = info["moving"] - {"pelvis"}
+        check(extra_moving <= set(kept),
+              f"facial: translation only on pelvis and facial joints {sorted(extra_moving)[:5]}")
         check(not (bones - info["bind_pose"]), "facial: bind pose covers every bone")
     finally:
         (settings.export_facial_joints, settings.keep_face, settings.filepath, settings.anim_dir,

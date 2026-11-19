@@ -325,7 +325,8 @@ class CSC_OT_export_unity(bpy.types.Operator):
                     result.warnings.append(
                         f"'{name}': '{prop.name}' has no animation in this action; it stays in the bind pose")
                 with anim_mod.use_action(context, anim_rig, action, prop_arms):
-                    baked = anim_mod.bake(context, result, start, end, name, fps, hold_bind=held)
+                    baked = anim_mod.bake(context, result, start, end, name, fps, hold_bind=held,
+                                          keep_translation=True)
                 clip_path = os.path.join(directory, _unity_anim_filename(name))
                 export_mod.export_anim_fbx(context, clip_path, result, baked, name, fps)
                 written.append(clip_path)

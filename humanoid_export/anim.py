@@ -3,10 +3,14 @@
 
 """Bakes a rig's animation onto the skeleton built by ``build.build()``.
 
-Every target bone gets the world-space rotation of its first source bone, frame by frame. Only the
-root bone (pelvis) is also keyed in location; the other character bones keep their rest offsets,
-so stretch and scale are dropped, as a Humanoid avatar would drop them anyway. Prop bones
-(see build.build(props=True)) key location and scale too, when those differ from the bind pose.
+Every target bone gets the world-space rotation of its first source bone, frame by frame. The root
+bone (pelvis) is also keyed in location. Facial joints (see build.build(facial_joints=True)) are
+too, when that translation leaves the bind pose, so a smile that moves the lip corners is kept.
+The other character bones keep their rest offsets, so limb stretch and scale are dropped, as a
+Humanoid avatar would drop them anyway. ``bake(keep_translation=True)`` (the Export to Unity path)
+keys that translation too, when it leaves the bind pose, so an IK arm still reaches the pose.
+Prop bones (see build.build(props=True)) key location and scale too, when those differ from the
+bind pose.
 """
 
 import math
@@ -347,15 +351,17 @@ def _rest_inverse(build, target, sources):
     return (build.rig_matrix @ build.source.data.bones[sources[0]].matrix_local).inverted()
 
 
-def bake(context, build, frame_start, frame_end, name, fps=None, hold_bind=()):
+def bake(context, build, frame_start, frame_end, name, fps=None, hold_bind=(), keep_translation=False):
     """Samples the source rig (at subframes when resampling to ``fps``, see resampled_frames())
     and returns an action for ``build.armature`` (left assigned to it) keying rotation_quaternion
-    of every bone and location of the root bones. Stretch that is dropped this way is reported in
-    ``build.warnings``.
+    of every bone, location of the root bones, and location of facial joints that leave the bind
+    pose. Stretch that is still dropped is reported in ``build.warnings``.
 
     Prop bones keep their scale in the sampled pose. Location and scale are keyed only when they
-    differ from the bind pose. Armatures in ``hold_bind`` are posed to that bind on every frame
-    (a clip that has no slot for the prop).
+    differ from the bind pose. Facial joints use that same location test and keep their rest scale.
+    With ``keep_translation`` the other character bones do too (location only), which is how the
+    Unity Generic clips keep an arm the IK has slid. Armatures in ``hold_bind`` are posed to that
+    bind on every frame (a clip that has no slot for the prop).
     """
     scene = context.scene
     rig, arm, plan = build.source, build.armature, build.plan
@@ -366,10 +372,18 @@ def bake(context, build, frame_start, frame_end, name, fps=None, hold_bind=()):
     frames = [key for key, _ in samples]
     prop_targets = set(build.prop_arm)
     locs = {t: [] for t in plan if plan[t][1] is None and t not in prop_targets}
+    # Facial joints are parented (to head, jaw, or another face bone), so they are not in ``locs``
+    # yet. Their translation is what carries a smile.
+    facial_locs = {t: [] for t in build.facial if t not in locs and t not in prop_targets}
+    # Unity Generic keeps every other joint that IK slides off the bind pose. The Mannequin export
+    # leaves this empty and reports the offset as dropped stretch.
+    body_locs = {}
+    if keep_translation:
+        body_locs = {t: [] for t in plan if t not in locs and t not in prop_targets and t not in facial_locs}
     prop_locs = {t: [] for t in prop_targets}
     prop_scales = {t: [] for t in prop_targets}
     rots = {t: [] for t in plan}
-    # Largest offset of a non-root character bone from its rest position: (distance, bone, scene time).
+    # Largest offset of a character bone whose translation is not exported: (distance, bone, scene time).
     stretch = (0.0, None, None)
     hold = [ob for ob in hold_bind if ob in build.prop_bind]
     for _, time in samples:
@@ -406,6 +420,10 @@ def bake(context, build, frame_start, frame_end, name, fps=None, hold_bind=()):
                 prop_scales[t].append(sca)
             elif t in locs:
                 locs[t].append(loc)
+            elif t in facial_locs:
+                facial_locs[t].append(loc)
+            elif t in body_locs:
+                body_locs[t].append(loc)
             elif loc.length > stretch[0]:
                 stretch = loc.length, t, time
 
@@ -417,6 +435,12 @@ def bake(context, build, frame_start, frame_end, name, fps=None, hold_bind=()):
 
     move = _PROP_MOVE * unit
     for t, samples_loc in prop_locs.items():
+        if any(v.length > move for v in samples_loc):
+            locs[t] = samples_loc
+    for t, samples_loc in facial_locs.items():
+        if any(v.length > move for v in samples_loc):
+            locs[t] = samples_loc
+    for t, samples_loc in body_locs.items():
         if any(v.length > move for v in samples_loc):
             locs[t] = samples_loc
     keyed_scale = {
